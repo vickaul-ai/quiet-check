@@ -96,3 +96,6 @@ Anthropic models, behind a swap layer: the `LLM_PROVIDER`, `LLM_MODEL_FAST` and 
 - PSI tells the initiator which member matched which field, so the merchant learns per-member hits. The who-saw-what panel
   says this; "count only" is future work.
 - PSI alone doesn't prove a member used the dataset it committed to.
+- Receipts are signed by the merchant. In AP3 1.2.2, members sign only the commitment on their AgentCard, not their PSI replies.
+- The SDK's PSI is pure Python and its cost grows linearly with list size (about 2.7 ms per entry per session, measured).
+  The demo lists hold about 300 entries per member, so a check takes about 3 s.

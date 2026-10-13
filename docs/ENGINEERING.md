@@ -15,6 +15,7 @@ a model swap layer, SQLite locally and Postgres on Render. Details and model cho
  Storefront + shopping agent ─┐                       ┌─> Member A :8101 ┐
  Merchant console + copilot ──┼─> Backend :8000 ──────┼─> Member B :8102 ├ AP3 PSI; lists never leave members
             (web :3000)       │   /risk  /payments    └─> Member C :8103 ┘
+                              │   + AP3 initiator :8100 (serves our AgentCard)
                               │   /merchant /webhooks
                               │          │  ▲
                               │          ▼  │ webhooks
@@ -46,6 +47,10 @@ Tables `orders`, `checks`, `receipts`, `decisions`, `events`: see [contracts.md]
 - Local: `make install`, `make dev`. Expose webhooks with `ngrok http 8000`, then set the sandbox webhook URL to
   `https://<ngrok-host>/webhooks/paypal`.
 - `web/AGENTS.md` is written by `next dev`; commit it as is.
+
+## AP3 SDK notes
+
+The D2 spike results (API shapes, signing, performance) are summarised in ADR 0004. AP3 1.2.2 needs Python <3.14.
 
 ## Risks
 

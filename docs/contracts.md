@@ -8,7 +8,8 @@ Any session that changes an interface updates this file in the same change and n
 | Process | Port (local) | Notes |
 | --- | --- | --- |
 | Backend (FastAPI) | 8000 | Routers: `/risk`, `/payments`, `/merchant`, `/webhooks` |
-| Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each holds its own private list; nothing else reads it |
+| AP3 initiator (`ap3_initiator` PrivacyAgent, in the backend process) | 8100 | Started in the backend's lifespan. It serves the merchant's AgentCard so members can verify our signed intents |
+| Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it |
 | Web (Next.js: storefront + console) | 3000 | Calls the backend only |
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
@@ -139,7 +140,7 @@ Response `200`:
 ### `POST /risk/check`: AP3 private check
 
 Called by the risk agent. It normalises and hashes each identifier (see Normalisation), then runs one PSI session per
-identifier per member: 9 sessions. Each session stores a receipt. All three identifiers are required. If any of the
+identifier per member: 9 sessions, run concurrently (about 3 s in total with ~300-entry lists). Each session stores a receipt. All three identifiers are required. If any of the
 9 sessions fails, the whole check fails: no partial results and no decision.
 
 Request:
@@ -194,6 +195,11 @@ Response `200`:
   ]
 }
 ```
+
+A receipt holds what can be checked, and nothing more: the merchant's 2 signed `PrivacyIntentDirective`s for the
+session (phases `init` and `msg1`, which the member verified before answering), the merchant's signed
+`PrivacyResultDirective`, and the member's signed commitment from its AgentCard. `verified` is true when all of these
+signatures check out. Member replies aren't signed in AP3 1.2.2, so the UI never calls this a "member-signed receipt".
 
 `hits` always holds all 9 results, ordered by member and then field as above. `receipts` holds one entry per session (9
 in all; only one is shown above). `hit_count` is the number of `is_match: true` entries. A repeat call for the same
@@ -295,9 +301,9 @@ Responses: `200 {"received": true}` for a verified event, including duplicates a
 {
   "who_saw_what": [
     {"party": "Merchant (us)", "sent": "Blinded hashes of email, address, device", "learned": "Match yes/no per member per field", "never_saw": "Any member's list"},
-    {"party": "Member A", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
-    {"party": "Member B", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
-    {"party": "Member C", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "Member A", "sent": "Its PSI responses (unsigned) and its signed commitment", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "Member B", "sent": "Its PSI responses (unsigned) and its signed commitment", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "Member C", "sent": "Its PSI responses (unsigned) and its signed commitment", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
     {"party": "PayPal", "sent": "Payer details; payment status", "learned": "Order, authorisation, capture or void", "never_saw": "Any fraud list or check result"}
   ]
 }
@@ -362,9 +368,11 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | `field` | text | `email`, `shipping_address`, `device_id` |
 | `is_match` | boolean | |
 | `session_id` | text | AP3 PSI session ID |
-| `intent_directive` | json | Signed `PrivacyIntentDirective` |
-| `result_directive` | json | Signed `PrivacyResultDirective` |
-| `verified` | boolean | Signatures verified |
+| `intent_directives` | json | Array of the 2 `PrivacyIntentDirective`s we signed (`init`, `msg1`) |
+| `result_directive` | json | `PrivacyResultDirective`, signed by the merchant |
+| `member_commitment` | json | The member's commitment from its AgentCard, signed by the member |
+| `member_public_key` | text | The member's Ed25519 public key (hex), from its AgentCard |
+| `verified` | boolean | Intent, result and commitment signatures all verified |
 | `created_at` | timestamp | |
 
 **`decisions`**
