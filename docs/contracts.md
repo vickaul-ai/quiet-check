@@ -1,0 +1,463 @@
+# Quiet Check: interface contracts
+
+Source of truth (copied from the D0 contracts on 2026-10-12).
+Any session that changes an interface updates this file in the same change and notes it in `STATUS.md`.
+
+## Topology and conventions
+
+| Process | Port (local) | Notes |
+| --- | --- | --- |
+| Backend (FastAPI) | 8000 | Routers: `/risk`, `/payments`, `/merchant`, `/webhooks` |
+| Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each holds its own private list; nothing else reads it |
+| Web (Next.js: storefront + console) | 3000 | Calls the backend only |
+
+- **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
+  **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs.
+- **Money:** `{"currency_code": "USD", "value": "49.00"}`. The value is a decimal string, as in PayPal. USD only.
+- **Times:** ISO 8601 UTC, e.g. `"2026-10-20T14:03:11Z"`.
+- **JSON:** snake_case, `Content-Type: application/json`.
+- **Members:** `"A"`, `"B"`, `"C"`. **Fields:** `"email"`, `"shipping_address"`, `"device_id"`.
+
+### Order status
+
+| Status | Meaning |
+| --- | --- |
+| `created` | PayPal order created (intent `AUTHORIZE`), waiting for buyer approval |
+| `approved` | Buyer approved in PayPal; the risk agent hasn't started |
+| `checking` | Risk agent running (AP3 check, then decision) |
+| `captured` | Clean (or reviewer capture): authorised and captured |
+| `held` | Hold: authorised only, waiting for a reviewer |
+| `blocked` | Block: never authorised; the PayPal order is left to expire |
+| `voided` | A reviewer voided the held authorisation |
+| `failed` | The check or a PayPal call failed; no decision recorded. Re-run with `POST /merchant/process` |
+
+Allowed transitions: `created -> approved`; `created | approved | failed -> checking` (the storefront's `onApprove` can
+arrive before the webhook); `checking -> captured | held | blocked | failed`; `held -> captured | voided`.
+
+Buyer-facing text (D5): `captured` "Paid"; `held` "Payment on hold for review"; `blocked` and `voided` "We couldn't
+complete this order"; anything else "Processing".
+
+## HTTP endpoints
+
+### `POST /payments/orders`: create order
+
+Called by the shopping agent's `checkout` tool. The backend prices items from its own catalog and never trusts prices from
+the agent. It calls PayPal `POST /v2/checkout/orders` with `intent: "AUTHORIZE"`, `custom_id` set to our `order_id`, and
+`PayPal-Request-Id: <order_id>:create`.
+
+Request:
+
+```json
+{
+  "items": [{"sku": "backpack-blue-m", "quantity": 1}],
+  "device_id": "dev-ana-7f3a"
+}
+```
+
+Response `201`:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "paypal_order_id": "5O190127TN364715T",
+  "status": "created",
+  "amount": {"currency_code": "USD", "value": "49.00"}
+}
+```
+
+The storefront passes `paypal_order_id` to the PayPal JS SDK v6 for approval. Each call creates a new order.
+
+### `POST /payments/orders/{order_id}/authorize`: authorise
+
+Called by `/merchant/decide` (clean and hold branches) and by the Gate A CLI. It first fetches
+`GET /v2/checkout/orders/{paypal_order_id}` and requires PayPal status `APPROVED`. It then calls
+`POST /v2/checkout/orders/{paypal_order_id}/authorize` with `PayPal-Request-Id: <order_id>:authorize`. This endpoint
+doesn't change the order's status; `/merchant/decide` does that.
+
+Request: `{}`
+
+Response `200`:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "paypal_order_id": "5O190127TN364715T",
+  "authorization_id": "0VF52814937998046",
+  "authorization_status": "CREATED",
+  "expires_at": "2026-11-18T14:03:11Z",
+  "honor_period_ends_at": "2026-10-23T14:03:11Z"
+}
+```
+
+`expires_at` comes from PayPal (holds last 29 days). `honor_period_ends_at` is the authorisation time plus 3 days.
+
+### `POST /payments/authorizations/{authorization_id}/capture`: capture
+
+Calls `POST /v2/payments/authorizations/{authorization_id}/capture` (full amount, `final_capture: true`) with
+`PayPal-Request-Id: <order_id>:capture`. It is allowed only from the clean branch (`actor: "policy"`) or on a held order
+(`actor: "reviewer"`).
+
+Request:
+
+```json
+{"actor": "reviewer", "note": "Confirmed with buyer by phone"}
+```
+
+`actor` is `"policy"` or `"reviewer"`. `note` is optional and stored in `events`.
+
+Response `201`:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "authorization_id": "0VF52814937998046",
+  "capture_id": "3C679366HH908993F",
+  "capture_status": "COMPLETED",
+  "amount": {"currency_code": "USD", "value": "49.00"},
+  "status": "captured"
+}
+```
+
+### `POST /payments/authorizations/{authorization_id}/void`: void
+
+Calls `POST /v2/payments/authorizations/{authorization_id}/void` with `PayPal-Request-Id: <order_id>:void`. It is allowed
+only on a `held` order with `actor: "reviewer"`.
+
+Request: `{"actor": "reviewer", "note": "Buyer unreachable"}`
+
+Response `200`:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "authorization_id": "0VF52814937998046",
+  "authorization_status": "VOIDED",
+  "status": "voided"
+}
+```
+
+### `POST /risk/check`: AP3 private check
+
+Called by the risk agent. It normalises and hashes each identifier (see Normalisation), then runs one PSI session per
+identifier per member: 9 sessions. Each session stores a receipt. All three identifiers are required. If any of the
+9 sessions fails, the whole check fails: no partial results and no decision.
+
+Request:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "identifiers": {
+    "email": "Ben.Buyer@Example.com ",
+    "shipping_address": {
+      "address_line_1": "12 Harbour St.",
+      "address_line_2": "Apt 4",
+      "admin_area_2": "Springfield",
+      "admin_area_1": "IL",
+      "postal_code": "62701",
+      "country_code": "US"
+    },
+    "device_id": "dev-ben-91c2"
+  }
+}
+```
+
+`shipping_address` uses the field names of PayPal's order `shipping.address` object, so the backend passes it through
+unchanged. (Confirm the names against the live Orders v2 response in D3.)
+
+Response `200`:
+
+```json
+{
+  "check_id": "chk_01JA...",
+  "order_id": "ord_01JA...",
+  "hits": [
+    {"member": "A", "field": "email", "is_match": false},
+    {"member": "A", "field": "shipping_address", "is_match": false},
+    {"member": "A", "field": "device_id", "is_match": false},
+    {"member": "B", "field": "email", "is_match": true},
+    {"member": "B", "field": "shipping_address", "is_match": false},
+    {"member": "B", "field": "device_id", "is_match": false},
+    {"member": "C", "field": "email", "is_match": false},
+    {"member": "C", "field": "shipping_address", "is_match": false},
+    {"member": "C", "field": "device_id", "is_match": false}
+  ],
+  "hit_count": 1,
+  "receipts": [
+    {
+      "receipt_id": "rcp_01JA...",
+      "member": "B",
+      "field": "email",
+      "session_id": "a3f1...",
+      "verified": true
+    }
+  ]
+}
+```
+
+`hits` always holds all 9 results, ordered by member and then field as above. `receipts` holds one entry per session (9
+in all; only one is shown above). `hit_count` is the number of `is_match: true` entries. A repeat call for the same
+`order_id` returns the stored check and doesn't rerun PSI.
+
+### `POST /merchant/process`: run the risk agent on an approved order
+
+Called by the storefront's `onApprove` and by the `CHECKOUT.ORDER.APPROVED` webhook handler, whichever comes first. The
+flow: read the order from PayPal (payer email, shipping address), use the stored `device_id`, call `/risk/check`, apply
+the policy, have `LLM_MODEL_FAST` write the rationale, then call `/merchant/decide`.
+
+Request: `{"order_id": "ord_01JA..."}`
+
+Response `200` (decision made, or already made):
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "status": "held",
+  "decision": "hold",
+  "decision_id": "dec_01JA...",
+  "check_id": "chk_01JA..."
+}
+```
+
+Response `202`, if a run for this order is already in progress: `{"order_id": "ord_01JA...", "status": "checking"}`.
+
+### `POST /merchant/decide`: record and execute a decision
+
+Internal: only the risk agent calls it. The backend recomputes the policy from the stored check. If `decision` differs from
+the recomputed one, the call fails with `409 policy_mismatch`, so the LLM can't change the outcome. On success the backend
+writes the `decisions` row and runs that branch's PayPal action: clean authorises then captures (`actor: "policy"`); hold
+authorises only; block takes no PayPal action.
+
+Request:
+
+```json
+{
+  "order_id": "ord_01JA...",
+  "decision": "hold",
+  "rationale": "The payer's email matched one consortium member's abuse list; address and device were clear everywhere. One signal isn't enough to decline, so funds are held for review.",
+  "check_id": "chk_01JA..."
+}
+```
+
+Response `200`:
+
+```json
+{
+  "decision_id": "dec_01JA...",
+  "order_id": "ord_01JA...",
+  "decision": "hold",
+  "paypal_action": "authorize",
+  "status": "held",
+  "authorization_id": "0VF52814937998046",
+  "capture_id": null
+}
+```
+
+`paypal_action` is `"authorize_capture"` (clean), `"authorize"` (hold) or `"none"` (block).
+
+### `POST /webhooks/paypal`: PayPal webhook receiver
+
+Every event is first verified with `POST /v1/notifications/verify-webhook-signature`, using `PAYPAL_WEBHOOK_ID` and the
+`PAYPAL-TRANSMISSION-*` headers. Each event is stored in `events` with `verified` true or false. The receiver acts only on
+verified events. A duplicate PayPal event ID returns `200` without acting again.
+
+Responses: `200 {"received": true}` for a verified event, including duplicates and event types we don't handle;
+`400 webhook_unverified` if verification fails.
+
+### Read endpoints (console and storefront)
+
+`GET /merchant/orders` returns the newest orders first:
+
+```json
+{
+  "orders": [
+    {
+      "order_id": "ord_01JA...",
+      "status": "held",
+      "decision": "hold",
+      "hit_count": 1,
+      "amount": {"currency_code": "USD", "value": "49.00"},
+      "paypal_order_id": "5O190127TN364715T",
+      "authorization_id": "0VF52814937998046",
+      "capture_id": null,
+      "honor_period_ends_at": "2026-10-23T14:03:11Z",
+      "created_at": "2026-10-20T14:01:02Z"
+    }
+  ]
+}
+```
+
+`GET /merchant/orders/{order_id}` returns the list fields plus `items`, `device_id`, `payer_email`, `shipping_address`,
+`check` (the `/risk/check` response), `receipts` (full rows, including the signed intent and result directives),
+`decision` (the full row, including the rationale) and `who_saw_what`:
+
+```json
+{
+  "who_saw_what": [
+    {"party": "Merchant (us)", "sent": "Blinded hashes of email, address, device", "learned": "Match yes/no per member per field", "never_saw": "Any member's list"},
+    {"party": "Member A", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "Member B", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "Member C", "sent": "Its PSI responses", "learned": "Nothing about the query or result", "never_saw": "The buyer's identifiers; other members' lists"},
+    {"party": "PayPal", "sent": "Payer details; payment status", "learned": "Order, authorisation, capture or void", "never_saw": "Any fraud list or check result"}
+  ]
+}
+```
+
+`GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first.
+The console polls it for the live feed.
+
+## Webhook events handled
+
+| Event | Action |
+| --- | --- |
+| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` |
+| `PAYMENT.AUTHORIZATION.CREATED` | Record `authorization_id`, `expires_at` and `honor_period_ends_at` if missing. No status change |
+| `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set the order to `voided` if it isn't already |
+| `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` and set the order to `captured` if it isn't already |
+| `CUSTOMER.DISPUTE.CREATED` | Store only. D8 (stretch) drafts evidence with `LLM_MODEL_SMART`; a human submits it |
+
+Confirm the event names in the dashboard's event list during D1.
+
+## Database tables
+
+SQLite locally, Postgres on Render. Types are given in portable terms; JSON columns are `TEXT` in SQLite and `JSONB` in Postgres.
+
+**`orders`**
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | `ord_...` |
+| `paypal_order_id` | text unique | |
+| `status` | text | See Order status |
+| `items` | json | `[{sku, name, quantity, unit_amount}]`, priced by the backend |
+| `amount_value` | text | Decimal string |
+| `currency_code` | text | `USD` |
+| `device_id` | text | Raw, as sent by the storefront |
+| `payer_email` | text null | From PayPal after approval |
+| `shipping_address` | json null | From PayPal after approval |
+| `authorization_id` | text null | |
+| `authorization_expires_at` | timestamp null | |
+| `honor_period_ends_at` | timestamp null | |
+| `capture_id` | text null | |
+| `created_at`, `updated_at` | timestamp | |
+
+**`checks`**
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | `chk_...` |
+| `order_id` | text unique FK -> orders | One check per order |
+| `status` | text | `running`, `completed`, `failed` |
+| `hit_count` | integer null | Set when completed |
+| `error` | text null | Error code if failed (never list contents) |
+| `started_at`, `completed_at` | timestamp | |
+
+**`receipts`**: one row per PSI session; the hits are derived from these rows.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | `rcp_...` |
+| `check_id` | text FK -> checks | |
+| `member` | text | `A`, `B`, `C` |
+| `field` | text | `email`, `shipping_address`, `device_id` |
+| `is_match` | boolean | |
+| `session_id` | text | AP3 PSI session ID |
+| `intent_directive` | json | Signed `PrivacyIntentDirective` |
+| `result_directive` | json | Signed `PrivacyResultDirective` |
+| `verified` | boolean | Signatures verified |
+| `created_at` | timestamp | |
+
+**`decisions`**
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | `dec_...` |
+| `order_id` | text unique FK -> orders | One decision per order |
+| `check_id` | text FK -> checks | |
+| `decision` | text | `clean`, `hold`, `block` |
+| `rationale` | text | AI-written, 2-3 sentences |
+| `paypal_action` | text | `authorize_capture`, `authorize`, `none` |
+| `resolution` | text null | Reviewer action on holds: `capture`, `void` |
+| `resolution_note` | text null | |
+| `resolved_at` | timestamp null | |
+| `created_at` | timestamp | |
+
+**`events`**
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | `evt_...` (ULIDs sort by time) |
+| `source` | text | `paypal_webhook` or `system` (our own actions, e.g. `check.completed`, `decision.made`, `capture.requested`) |
+| `paypal_event_id` | text unique null | Deduplicates webhook deliveries |
+| `event_type` | text | e.g. `PAYMENT.CAPTURE.COMPLETED`, `decision.made` |
+| `order_id` | text null FK -> orders | |
+| `resource_id` | text null | PayPal resource ID |
+| `verified` | boolean null | Webhooks only |
+| `payload` | json | Never contains list contents |
+| `created_at` | timestamp | |
+
+## Identifier normalisation
+
+The risk service and all three members use one shared function, so the same input always produces the same output on
+every side. Normalise, then hash, before a value enters PSI or a member's list file.
+
+| Field | Rule |
+| --- | --- |
+| `email` | Trim, then lowercase. No provider-specific rewriting (Gmail dots and `+tags` are kept) |
+| `shipping_address` | For each of `address_line_1`, `address_line_2`, `admin_area_2`, `admin_area_1`, `postal_code`: Unicode NFKC, lowercase, trim, collapse runs of whitespace to one space, remove punctuation. Also remove all spaces from `postal_code`. `country_code`: trim, uppercase ISO 3166-1 alpha-2. A missing field becomes `""`. Join the six in that order with `\|` |
+| `device_id` | Trim, then lowercase |
+
+Hash: `sha256("<field>:" + normalised_value)`, as lowercase hex, where `<field>` is `email`, `shipping_address` or
+`device_id`. The prefix stops an email from matching an address. Member list files store only these hashes.
+
+Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
+
+D10 unit-tests these rules. List entries, normalised values and hashes never appear in logs (a CI grep enforces this).
+
+## Environment variables
+
+| Variable | Used by | Default / example |
+| --- | --- | --- |
+| `PAYPAL_CLIENT_ID` | Backend; web (JS SDK) | Sandbox REST app client ID |
+| `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |
+| `PAYPAL_WEBHOOK_ID` | Backend (webhook verification) | From the dashboard webhook config |
+| `ANTHROPIC_API_KEY` | Backend; web | - |
+| `LLM_PROVIDER` | Backend; web | `anthropic` |
+| `LLM_MODEL_FAST` | Shopping agent, rationale, copilot | `claude-haiku-5-5` |
+| `LLM_MODEL_SMART` | Dispute drafts (D8) | `claude-sonnet-5-5` |
+| `DATABASE_URL` | Backend | `sqlite:///./quietcheck.db` locally; Render Postgres URL when hosted |
+
+Later deliverables that add a variable (for example, member URLs for Render in D9) list it here and in `.env.example`.
+
+## Errors
+
+Every non-2xx response uses this body:
+
+```json
+{"error": {"code": "invalid_state", "message": "Order ord_01JA... is captured; void needs held.", "details": {}}}
+```
+
+| HTTP | `code` | When |
+| --- | --- | --- |
+| 400 | `bad_request` | Malformed JSON or headers |
+| 400 | `webhook_unverified` | Webhook signature verification failed |
+| 404 | `not_found` | Unknown order, check, authorisation or SKU |
+| 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions) |
+| 409 | `policy_mismatch` | `/merchant/decide` decision differs from the policy result |
+| 422 | `validation_error` | Missing or invalid fields (e.g. a missing identifier); `details` names the fields |
+| 502 | `paypal_error` | PayPal returned an error; `details` holds PayPal's `name`, `debug_id` and `issue` |
+| 502 | `member_unavailable` | A consortium member didn't complete a PSI session; the check is marked `failed` |
+
+`message` and `details` never include list contents or hashes.
+
+## Idempotency
+
+- **PayPal calls:** every POST to PayPal sends `PayPal-Request-Id: <order_id>:<action>`, where `<action>` is `create`,
+  `authorize`, `capture` or `void`. A retry of the same action reuses the same ID, so PayPal returns the original result.
+- **Our endpoints are idempotent on `order_id`.** `authorize`, `capture`, `void`, `/risk/check`, `/merchant/process` and
+  `/merchant/decide` return the stored result if the action already happened for that order. They don't call PayPal or
+  rerun PSI. A call that conflicts with the stored state (e.g. void after capture) returns `409 invalid_state`.
+- **Webhooks:** deduplicated on `paypal_event_id`.
+- **Concurrency:** `/merchant/process` moves the order to `checking` in one conditional update (`WHERE status IN
+  ('approved','created','failed')`). Whichever trigger loses the race (webhook or `onApprove`) gets `202`.
+- **Exception:** `POST /payments/orders` creates a new order on every call.
