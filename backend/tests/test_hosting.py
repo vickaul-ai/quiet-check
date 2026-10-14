@@ -48,7 +48,9 @@ def hosted(run_dir, fake, model, request):
             start_initiator=False,
             render_transport=httpx.MockTransport(render_api),
             **paypal_settings(fake, model),
-            **kw,
+            # TestClient runs background tasks before returning: no 45 s fallback wait, and
+            # no cooldown between the tests' back-to-back calls, unless a test asks.
+            **({"workflow_fallback_s": None, "start_cooldown_s": 0} | kw),
         )
         return TestClient(create_app(settings))
 
@@ -223,8 +225,54 @@ def test_settings_from_render_env(monkeypatch) -> None:
     assert hosted.initiator_host == "0.0.0.0"
     assert hosted.initiator_url == "http://quietcheck-backend-ab12:8100"
     assert hosted.risk_workflow_task == ""
+    # The documented discovery name wins over the service name.
+    monkeypatch.setenv("RENDER_DISCOVERY_SERVICE", "quietcheck-backend-ef56-discovery")
+    assert Settings.from_env().initiator_url == "http://quietcheck-backend-ef56:8100"
     monkeypatch.setenv("INITIATOR_URL", "http://elsewhere:8100")
     monkeypatch.setenv("RISK_WORKFLOW_SLUG", "quietcheck-risk-x1")
     again = Settings.from_env()
     assert again.initiator_url == "http://elsewhere:8100"
     assert again.risk_workflow_task == "quietcheck-risk-x1/process_order"
+
+
+def test_stalled_workflow_run_falls_back_to_in_process(hosted, fake) -> None:
+    """Render accepted the run, but it never claimed the order (e.g. it can't reach us)."""
+    make, calls, _state = hosted
+    with make(
+        render_api_key="rnd_test",
+        risk_workflow_task="quietcheck-risk/process_order",
+        workflow_fallback_s=0.01,
+    ) as api:
+        order = create(api)
+        fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
+        store_check(api.app.state.engine, order["order_id"], "clean")
+        assert api.post("/merchant/start", json={"order_id": order["order_id"]}).status_code == 202
+        assert len(calls) == 1
+        assert (
+            api.get(f"/merchant/orders/{order['order_id']}/status").json()["status"] == "captured"
+        )
+        started = [
+            r.payload
+            for r in rows(api, events, order_id=order["order_id"])
+            if r.event_type == "risk_agent.started"
+        ]
+        assert started == [
+            {"runner": "render_workflow", "task_run_id": "trn-1"},
+            {"runner": "in_process", "reason": "stalled"},
+        ]
+
+
+def test_start_cools_down_per_order(hosted, fake) -> None:
+    make, calls, _state = hosted
+    with make(
+        render_api_key="rnd_test",
+        risk_workflow_task="quietcheck-risk/process_order",
+        start_cooldown_s=60,
+    ) as api:
+        order = create(api)
+        fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
+        for _ in range(5):
+            assert (
+                api.post("/merchant/start", json={"order_id": order["order_id"]}).status_code == 202
+            )
+        assert len(calls) == 1  # one PayPal read and one Render call, not five

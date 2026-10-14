@@ -18,7 +18,7 @@ from typing import Literal
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Engine, desc, insert, select, update
+from sqlalchemy import Engine, desc, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import checks, decisions, events, orders, receipts
@@ -451,7 +451,14 @@ def _event(row) -> dict:
 
 @router.get("/events")
 def list_events(request: Request, after: str | None = Query(default=None, max_length=64)) -> dict:
-    query = select(events).order_by(events.c.id).limit(EVENTS_LIMIT)
+    # Unverified webhook deliveries stay stored for the record but out of the feed: the webhook
+    # URL is public, so anyone can post them (D9).
+    query = (
+        select(events)
+        .where(or_(events.c.verified.is_(None), events.c.verified.is_(True)))
+        .order_by(events.c.id)
+        .limit(EVENTS_LIMIT)
+    )
     if after:
         query = query.where(events.c.id > after)
     with request.app.state.engine.connect() as conn:

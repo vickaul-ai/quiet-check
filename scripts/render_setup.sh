@@ -272,8 +272,15 @@ pause "  Done with the backend? Enter"
 say "quietcheck-web:"
 clip PAYPAL_CLIENT_ID;     pause "  PAYPAL_CLIENT_ID pasted? Enter"
 step "ANTHROPIC_API_KEY: the same key from stage 2."
-step "CONSOLE_PASSWORD: choose the console password judges will get on Devpost."
-note "  (Keep it in your private note; it goes in the Devpost testing instructions, never the repo.)"
+say "CONSOLE_PASSWORD: a random one, since the console can capture or void payments and the login"
+say "has no lockout. Not saved to .env (the local web app reads it and would lock your local console)."
+if command -v pbcopy >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; then
+  openssl rand -base64 18 | tr -d '\n' | pbcopy
+  printf '  %s✓ copied%s a new 24-character password; paste it into the form AND your private note\n' "$GREEN" "$RESET"
+else
+  step "Generate one with: openssl rand -base64 18  (24 characters)"
+fi
+note "  (It goes in the Devpost testing instructions, never the repo.)"
 pause "  Done with the web service? Enter"
 say "Members (each gets only the email seeded on its own list):"
 clip PERSONA_CY_EMAIL;  pause "  quietcheck-member-a PERSONA_CY_EMAIL pasted? Enter"

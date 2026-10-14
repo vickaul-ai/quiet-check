@@ -74,7 +74,8 @@ async def wait_for_decision(ctx: TaskContext, order_id: str) -> dict:
     return {"order_id": order_id, "status": status}
 
 
-@app.task(timeout_seconds=600, retry=Retry(max_retries=0, wait_duration_ms=1000))
+# Long enough for run_risk_agent's worst case (4 attempts x 180 s plus backoff) and the wait.
+@app.task(timeout_seconds=1080, retry=Retry(max_retries=0, wait_duration_ms=1000))
 async def process_order(ctx: TaskContext, order_id: str) -> dict:
     """Entry point: one run per approved order."""
     result = await ctx.run(run_risk_agent, order_id)

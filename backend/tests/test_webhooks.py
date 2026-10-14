@@ -70,9 +70,16 @@ def test_unverified_event_is_stored_without_its_id_and_rejected(api, fake) -> No
     assert row.resource_id is None
     assert row.payload == {"claimed_id": event["id"], "event_type": "CHECKOUT.ORDER.APPROVED"}
     assert order_row(api, order["order_id"]).status == "created"
+    # Stored, but kept out of the console feed (D9: the webhook URL is public).
+    feed = api.get("/merchant/events").json()["events"]
+    assert all(e["verified"] is not False for e in feed)
 
     assert send(api, event).status_code == 200  # the genuine delivery still acts
     assert order_row(api, order["order_id"]).status == "approved"
+    feed = api.get("/merchant/events").json()["events"]
+    assert [e["event_type"] for e in feed if e["source"] == "paypal_webhook"] == [
+        "CHECKOUT.ORDER.APPROVED"
+    ]
 
 
 def test_missing_headers_and_bad_bodies(api, fake) -> None:

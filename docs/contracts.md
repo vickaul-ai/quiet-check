@@ -16,8 +16,8 @@ Any session that changes an interface updates this file in the same change and n
 **Hosted on Render (D9, ADR 0011; `render.yaml`):** backend and web are public web services; Members A-C are private
 services; Postgres and the workflow are private. All share region `oregon`. Services find each other by internal
 hostname (`fromService ... host` in the Blueprint): the web and workflow reach the backend at `http://<host>:10000`,
-the initiator listens on `0.0.0.0:8100` with card URL `http://$RENDER_SERVICE_NAME:8100`, and each member listens on
-its usual port with card URL `http://$RENDER_SERVICE_NAME:<port>`, which must equal the backend's `MEMBER_<M>_URL`.
+the initiator listens on `0.0.0.0:8100` and each member on its usual port; each builds its card URL from its internal hostname (`$RENDER_DISCOVERY_SERVICE` minus `-discovery`, which Render documents as `<internal hostname>-discovery`; else `$RENDER_SERVICE_NAME`),
+as `http://<host>:<port>`. A member's card URL must equal the backend's `MEMBER_<M>_URL`.
 
 **Backend auth (D9):** when `BACKEND_API_TOKEN` is set (always on Render; the backend refuses to start there
 without it), every route needs `Authorization: Bearer <token>` except `GET /health`, `POST /webhooks/paypal`
@@ -276,9 +276,12 @@ order (storing the payer details, as `/merchant/process` does; a PayPal failure 
 PayPal reports `APPROVED` (or `COMPLETED`), starts the risk agent, so a premature call can't use up the order's task
 run: with `RENDER_API_KEY` and the workflow task set, a Render Workflows task run (`POST
 https://api.render.com/v1/task-runs`, task `<RISK_WORKFLOW_SLUG>/process_order`, input `[order_id]`, idempotency key
-the order ID, or `<order_id>:rerun:<n>` for a `failed` order, n = its workflow runs so far, at most 3 reruns per order); if that call fails, or locally, in the backend process after the
+the order ID, or `<order_id>:rerun:<n>` for a `failed` order, n = its runs so far; at most 3 reruns per order, either runner); if that call fails, or locally, in the backend process after the
 response. Either way it writes a `risk_agent.started` event (payload `runner`: `render_workflow` with `task_run_id`,
-or `in_process`; one event per task run). Unknown order: `404 not_found`. The `CHECKOUT.ORDER.APPROVED` webhook starts the risk agent the
+or `in_process`; one event per task run). If a workflow run hasn't moved the order out of `created`/`approved` 45 s
+after it started (`workflow_fallback_s`), the backend runs it in-process and writes `risk_agent.started` with
+`runner: in_process, reason: stalled`. Calls for one order within 5 s of the last are answered without reading
+PayPal or starting anything (`start_cooldown_s`). Unknown order: `404 not_found`. The `CHECKOUT.ORDER.APPROVED` webhook starts the risk agent the
 same way, so with both triggers one task run serves the order.
 
 The task (`process_order`) calls `/merchant/process` (subtask `run_risk_agent`, up to 3 retries on a 5xx or 401; a
@@ -437,7 +440,8 @@ string) and `who_saw_what`:
 }
 ```
 
-`GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first
+`GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first,
+leaving out unverified webhook deliveries (stored, but anyone can post them; D9)
 (from the very first event without `after`). Each has `event_id`, `source`, `event_type`, `order_id`, `paypal_event_id`,
 `resource_id`, `verified`, `payload` and `created_at`. The console polls it for the live feed.
 
@@ -469,10 +473,11 @@ The merchant console lives at `/console` in the same app, linked from the shop h
 (`web/proxy.ts`); otherwise `401` with a `WWW-Authenticate` challenge. With no `CONSOLE_PASSWORD`, `next dev` leaves
 the console open and production answers `503`. The shop stays public.
 
-**Chat rate limits (D9, `web/lib/limits.ts`):** `POST /api/chat` and `POST /api/console/chat` each allow 20 requests
-per visitor (first `X-Forwarded-For` address) per 10 minutes, and 600 requests per 24 hours across both routes and all
-visitors, in memory on the one web instance. `POST /api/orders/{order_id}/process` has its own 20 per visitor per 10
-minutes (it reads the PayPal order and may start a workflow run) and doesn't count toward the 600. Over a limit: `429 {"error": {"code": "rate_limited", ...}}` with
+**Rate limits (D9, `web/lib/limits.ts`):** `POST /api/chat`, `POST /api/console/chat` and
+`POST /api/orders/{order_id}/process` each allow 20 requests per visitor (first `X-Forwarded-For` address) per 10
+minutes, plus a route-wide hourly cap: 150 per hour for each chat route, 600 for the process route. Each route has its
+own buckets, so a flood of public chat can't lock out the console copilot, and a lockout lasts at most an hour. In
+memory on the one web instance. Over a limit: `429 {"error": {"code": "rate_limited", ...}}` with
 `Retry-After`, and the chat panel says so. A model error mid-stream sends the error text `ai_unavailable: ...` when it
 looks like a spent budget or provider rate limit (the panel explains), else `chat_error`. The hosted model budget is a
 $10 spend limit on the Anthropic key's workspace (decided with Vic).
@@ -480,7 +485,7 @@ $10 spend limit on the Anthropic key's workspace (decided with Vic).
 The browser calls only these routes. Payer email and shipping address never leave the Next.js server: the detail route
 drops them, and the events route passes only these payload keys: `summary`, `decision`, `hit_count`, `verified`,
 `check_id`, `rationale_source`, `paypal_action`, `actor`, `note`, `capture_id`, `capture_status`, `authorization_id`,
-`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error`, `runner`, `task_run_id` (PayPal webhook
+`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error`, `runner`, `reason`, `task_run_id` (PayPal webhook
 payloads hold the payer).
 
 | Route | Calls | Returns to the browser |
@@ -648,8 +653,8 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `INITIATOR_PRIVATE_KEY`, `MEMBER_PRIVATE_KEY` | Backend; each member | Hosted (D9): AP3 Ed25519 keys (32 bytes, base64 or hex). Unset: the key files under `backend/var/` |
 | `MEMBER_A_HOST`, `MEMBER_B_HOST`, `MEMBER_C_HOST` (or `MEMBER_<M>_URL`) | Backend | Hosted (D9): each member's internal hostname (URL `http://<host>:8101` etc.), or a full URL. Default `http://127.0.0.1:810x` |
 | `INITIATOR_HOST` (or `INITIATOR_URL`) | Each member | Hosted (D9): the backend's internal hostname; the member allows only `http://<host>:8100` |
-| `INITIATOR_URL`, `INITIATOR_BIND`, `INITIATOR_PORT` | Backend | The initiator's card URL (default on Render `http://$RENDER_SERVICE_NAME:8100`, else `http://127.0.0.1:8100`), listen address (Render `0.0.0.0`, else `127.0.0.1`) and port (`8100`) |
-| `MEMBER_CARD_URL` | Each member | Override for the member's card URL (default on Render `http://$RENDER_SERVICE_NAME:<port>`) |
+| `INITIATOR_URL`, `INITIATOR_BIND`, `INITIATOR_PORT` | Backend | The initiator's card URL (default on Render `http://<own internal hostname>:8100`, else `http://127.0.0.1:8100`), listen address (Render `0.0.0.0`, else `127.0.0.1`) and port (`8100`) |
+| `MEMBER_CARD_URL` | Each member | Override for the member's card URL (default on Render `http://<own internal hostname>:<port>`) |
 | `QC_TEST_POSTGRES_URL` | Backend tests | Optional: run the suite on Postgres, one fresh database per test app (CI does, D9) |
 | `TOOL_APPROVAL_SECRET` | Web (server only) | Optional (D6): HMAC key that signs the copilot's approval requests. Unset: a random per-process key, fine for one local server; set it (`openssl rand -base64 32`) once the web app runs on more than one instance |
 | `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |
@@ -662,8 +667,8 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `MEMBER_DATA_DIR` | Members; `scripts/seed.py` | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
 | `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py`; hosted members (D9: A and C get Cy's, B gets Ben's) | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
 
-Later deliverables that add a variable list it here and in `.env.example`. Render also sets `RENDER=true` and
-`RENDER_SERVICE_NAME` on every service; the code reads both (D9).
+Later deliverables that add a variable list it here and in `.env.example`. Render also sets `RENDER=true`,
+`RENDER_DISCOVERY_SERVICE` and `RENDER_SERVICE_NAME` on every service; the code reads them (D9).
 
 ## Errors
 

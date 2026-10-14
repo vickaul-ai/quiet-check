@@ -27,11 +27,22 @@ def private_url(host: str, port: int) -> str:
     return f"http://{host}:{port}"
 
 
+def own_hostname() -> str | None:
+    """This service's internal hostname on Render, or None off Render (D9). Render documents
+    `RENDER_DISCOVERY_SERVICE` as `<internal hostname>-discovery` (private-network docs), so
+    that is the anchor; `RENDER_SERVICE_NAME` is the fallback."""
+    if not os.environ.get("RENDER"):
+        return None
+    discovery = os.environ.get("RENDER_DISCOVERY_SERVICE", "")
+    if discovery.endswith("-discovery"):
+        return discovery.removesuffix("-discovery")
+    return os.environ.get("RENDER_SERVICE_NAME") or None
+
+
 def own_private_url(port: int) -> str | None:
-    """This service's URL on Render's private network, or None off Render. Render's default
-    `RENDER_SERVICE_NAME` is the internal hostname other services reach us at (D9)."""
-    name = os.environ.get("RENDER_SERVICE_NAME")
-    return private_url(name, port) if os.environ.get("RENDER") and name else None
+    """This service's URL on Render's private network, or None off Render."""
+    host = own_hostname()
+    return private_url(host, port) if host else None
 
 
 def _risk_workflow_task() -> str:
@@ -97,6 +108,11 @@ class Settings:
     risk_workflow_task: str = ""
     render_api_url: str = "https://api.render.com/v1"
     render_transport: Any = None
+    # Seconds after starting a workflow run before the backend runs a still-unclaimed order
+    # in-process (app/workflow.py). None: never.
+    workflow_fallback_s: float | None = 45.0
+    # Seconds between /merchant/start PayPal reads for one order (a public route calls it).
+    start_cooldown_s: float = 5.0
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":

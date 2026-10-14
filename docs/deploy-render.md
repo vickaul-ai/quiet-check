@@ -43,12 +43,16 @@ Its stages, for reference:
 - **Deploys:** push to `main`; each service redeploys after CI passes, only if its paths changed (`buildFilter`).
 - **Smoke check / warm-up** (e.g. on recording day): `scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"`.
   Paid instances don't sleep, so the times it prints are warm response times.
-- **Logs:** each service's Logs tab. Members log `initiators allowed: http://quietcheck-backend-…:8100` at start; the
-  console feed shows `risk_agent.started` with `runner: render_workflow` and the task run ID for each order.
+- **Logs:** each service's Logs tab. Members log `serving on 0.0.0.0:<port> as http://<their hostname>:<port>,
+  initiators allowed: http://quietcheck-backend-…:8100`; the backend logs `AP3 initiator serving as …; members: …`.
+  The console feed shows `risk_agent.started` with `runner: render_workflow` and the task run ID for each order.
 - **If AP3 checks fail with `member_unavailable`:** compare the member's logged card URL with the backend's
   `MEMBER_<M>_HOST`. They should match (both are the service's internal hostname); if not, set `MEMBER_CARD_URL` on the
   member or `MEMBER_<M>_URL` on the backend (and `INITIATOR_URL` on both sides for the initiator).
-- **If the workflow isn't used** (feed shows `runner: in_process`): check `RENDER_API_KEY` and `RISK_WORKFLOW_SLUG` on
+- **If orders show `runner: in_process, reason: stalled`:** Render started the workflow run but it didn't reach the
+  backend within 45 s; open the run in Render (`quietcheck-risk`) for its error (often `BACKEND_HOST` or the token).
+  Orders still get decided in-process.
+- **If the workflow isn't used** (feed shows `runner: in_process` with no reason): check `RENDER_API_KEY` and `RISK_WORKFLOW_SLUG` on
   the backend; the backend logs `workflow run not started (<error>)`. Orders still get decided in-process.
 - **Keys:** `INITIATOR_PRIVATE_KEY` and `MEMBER_PRIVATE_KEY` are generated once; don't change them. Stored receipts
   keep their `verified` flag, but re-verifying an old receipt needs the initiator key that signed it.

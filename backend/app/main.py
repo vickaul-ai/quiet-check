@@ -73,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Quiet Check backend", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
+    app.state.last_start = {}  # /merchant/start cooldown (app/workflow.py)
     install_error_handlers(app)
 
     if settings.api_token:
