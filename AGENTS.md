@@ -15,4 +15,7 @@ holds or declines the payment through PayPal Orders v2 (sandbox only).
 - AP3: the backend hosts the initiator on :8100; Members A-C are separate processes (`make dev-member-A`, :8101-8103)
   reading `backend/var/members/<M>/list.csv` and `key.json` (git-ignored). Members answer only initiators on their `--initiator-url` allowlist; `/risk/check` reads identifiers from the order, never the request (ADR 0006). DB: SQLAlchemy Core, tables in
   `backend/app/db.py` (ADR 0005). Integration tests start real members; `uv run pytest -m slow -s` times a demo-size check.
+- PayPal (sandbox): REST client in `backend/app/paypal.py`, no Agent Toolkit (it has no authorise/void). CI uses a fake
+  PayPal; live runs (`make approve-orders`, `make test-live`, `make gate-a`) need a human to approve orders once and
+  `ngrok http 8000` (ADR 0007). Payment endpoints enforce status guards; D4 owns status changes.
 - Docs: `docs/PRODUCT.md`, `docs/ENGINEERING.md`, ADRs in `docs/decisions/`.

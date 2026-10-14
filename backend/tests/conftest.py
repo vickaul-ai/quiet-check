@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from app.config import BACKEND_DIR, MEMBERS, Settings
 from app.main import create_app
 from tests import cases
+from tests.fake_paypal import WEBHOOK_ID, FakePayPal
 from tests.harness import MemberProcess, free_port, write_lists
 
 RUN_DIR = Path(os.environ.get("QC_TEST_RUN_DIR") or BACKEND_DIR / "var" / "test-run")
@@ -83,4 +84,28 @@ def client(run_dir: Path, consortium):
     port = consortium["initiator_ports"]["main"]
     app = create_app(make_settings(run_dir, "main", urls, port))
     with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def fake() -> FakePayPal:
+    """A fresh in-memory PayPal sandbox (tests/fake_paypal.py)."""
+    return FakePayPal()
+
+
+@pytest.fixture
+def api(run_dir: Path, fake: FakePayPal, request):
+    """An app wired to the fake PayPal, with no AP3 initiator (payments and webhooks only)."""
+    settings = make_settings(
+        run_dir,
+        f"payments-{request.node.name}",
+        {},
+        free_port(),
+        start_initiator=False,
+        paypal_client_id="fake-id",
+        paypal_client_secret="fake-secret",
+        paypal_webhook_id=WEBHOOK_ID,
+        paypal_transport=fake.transport,
+    )
+    with TestClient(create_app(settings)) as c:
         yield c

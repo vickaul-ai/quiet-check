@@ -32,5 +32,8 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not slow'"
-markers = ["slow: demo-size timing run (opt-in: -m slow)"]
+addopts = "-m 'not slow and not live'"
+markers = [
+    "slow: demo-size timing run (opt-in: -m slow)",
+    "live: real PayPal sandbox run; needs saved approved orders and ngrok (opt-in: -m live)",
+]

@@ -10,7 +10,10 @@ file tracks what exists today.
 - **AP3 private check (D2):** `POST /risk/check` checks a buyer's email, shipping address and device ID against
   Members A, B and C (9 PSI sessions, ~3 s) and returns per-member, per-field hits plus 9 verified receipts. Members run
   as separate processes and never share their lists. Idempotent per order; a failed check can be rerun.
-- No storefront, payments or console yet. The web app shows a placeholder page.
+- **PayPal payments (D3):** `GET /catalog` (7 SKUs), `POST /payments/orders` (backend-priced, intent `AUTHORIZE`),
+  authorise, capture and void with status guards (money moves only from a clean decision or a reviewer on a held order),
+  and `POST /webhooks/paypal` with signature verification and dedupe. Sandbox only.
+- No risk agent, storefront or console yet; D4's stand-ins move order status in tests. The web app shows a placeholder page.
 
 ## Roadmap
 
@@ -30,7 +33,10 @@ file tracks what exists today.
 - Sandbox only; USD only.
 - Receipts are signed by the merchant (intents and result); a member's only signature is on its commitment (ADR 0004).
 - Members load their lists at startup; reseeding needs a member restart.
-- `/risk/check` has no authentication yet (ADR 0006); the hosted build must keep it off the public surface or add auth.
+- `/risk/check` and the `/payments` actions have no authentication yet (ADR 0006); the hosted build must keep them off the
+  public surface or add auth.
+- No reauthorisation endpoint: a hold older than the 3-day honour period can be reauthorised only from code (ADR 0007).
+- Live payment tests need a human to approve each sandbox order once (ADR 0007).
 
 ## Non-goals
 

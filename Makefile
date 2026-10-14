@@ -1,4 +1,5 @@
-.PHONY: install dev dev-backend dev-web dev-member-A dev-member-B dev-member-C check sandbox
+.PHONY: install dev dev-backend dev-web dev-member-A dev-member-B dev-member-C check sandbox \
+	approve-orders test-live gate-a
 
 install:
 	cd backend && uv sync
@@ -23,3 +24,13 @@ check:
 
 sandbox:
 	uv run scripts/check_sandbox.py
+
+# Live PayPal sandbox runs (ADR 0007): stop dev-backend first and keep `ngrok http 8000` running.
+approve-orders:
+	cd backend && uv run python scripts/approve_orders.py --count $(or $(COUNT),2)
+
+test-live:
+	cd backend && uv run pytest -m live -s
+
+gate-a:
+	cd backend && uv run python scripts/gate_a.py --end $(or $(END),capture)

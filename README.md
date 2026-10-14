@@ -3,7 +3,7 @@
 A merchant agent privately checks an AI-agent purchase against other merchants' fraud lists (AP3 private set
 intersection), then uses PayPal to capture, hold or decline the payment. No merchant ever shares its list.
 
-Built for the PayPal AI Hackathon (2026). Status: the AP3 consortium check works (D2); payments, agents and UI land through November 2026.
+Built for the PayPal AI Hackathon (2026). Status: the AP3 consortium check (D2) and the PayPal payments service (D3) work; agents and UI land through November 2026.
 
 ## Quickstart
 
@@ -25,6 +25,9 @@ make dev                  # backend on :8000, web on :3000
 | `make check` | What CI runs: ruff, pytest, the log scan for list contents, eslint, type-check |
 | `cd backend && uv run pytest -m slow -s` | Times `/risk/check` with ~300-entry member lists (target about 3 s) |
 | `make sandbox` | `uv run scripts/check_sandbox.py` |
+| `make approve-orders` | Creates sandbox orders, prints approval links, saves approved orders for live runs (needs `ngrok http 8000`, `make dev-backend` stopped) |
+| `make test-live` | `pytest -m live`: authorise -> capture and authorise -> void on 2 saved orders, waiting for verified webhooks |
+| `make gate-a END=capture` | Gate A on 1 saved order: risk check -> authorise -> capture (or `END=void`) |
 
 ## Environment variables
 

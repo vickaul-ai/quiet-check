@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -13,6 +14,7 @@ VAR_DIR = BACKEND_DIR / "var"  # git-ignored: member lists and keys, the initiat
 MEMBERS = ("A", "B", "C")
 INITIATOR_PORT = 8100
 MEMBER_PORTS = {"A": 8101, "B": 8102, "C": 8103}
+PAYPAL_SANDBOX_URL = "https://api-m.sandbox.paypal.com"
 
 load_dotenv(REPO_DIR / ".env")
 
@@ -30,10 +32,22 @@ class Settings:
     # Seconds allowed for all 9 PSI sessions together before the check fails.
     check_timeout_s: float = 60.0
     start_initiator: bool = True
+    # PayPal REST app (sandbox only). Tests pass an httpx transport that fakes PayPal.
+    paypal_base_url: str = PAYPAL_SANDBOX_URL
+    paypal_client_id: str = ""
+    paypal_client_secret: str = field(default="", repr=False)
+    paypal_webhook_id: str = ""
+    paypal_transport: Any = None
 
     @classmethod
-    def from_env(cls) -> "Settings":
-        return cls(database_url=os.environ.get("DATABASE_URL") or cls.database_url)
+    def from_env(cls, **overrides) -> "Settings":
+        values = {
+            "database_url": os.environ.get("DATABASE_URL") or cls.database_url,
+            "paypal_client_id": os.environ.get("PAYPAL_CLIENT_ID", ""),
+            "paypal_client_secret": os.environ.get("PAYPAL_CLIENT_SECRET", ""),
+            "paypal_webhook_id": os.environ.get("PAYPAL_WEBHOOK_ID", ""),
+        }
+        return cls(**(values | overrides))
 
 
 def member_data_dir() -> Path:

@@ -40,6 +40,24 @@ complete this order"; anything else "Processing".
 
 ## HTTP endpoints
 
+### `GET /catalog`: product catalogue (D3)
+
+The storefront and the shopping agent read the products from here. `backend/app/catalog.json` is the source of truth,
+one SKU per variant; `POST /payments/orders` prices from the same file. D5 adds images (new optional fields only).
+
+Response `200`:
+
+```json
+{
+  "items": [
+    {"sku": "backpack-blue-m", "name": "Trail Backpack, Blue, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}}
+  ]
+}
+```
+
+The 7 SKUs: `backpack-blue-s` (45.00), `backpack-blue-m` (49.00), `backpack-blue-l` (54.00), `backpack-black-m`
+(49.00), `duffel-green` (79.00), `bottle-steel` (24.00), `cap-navy` (19.00), in that order.
+
 ### `POST /payments/orders`: create order
 
 Called by the shopping agent's `checkout` tool. The backend prices items from its own catalog and never trusts prices from
@@ -68,6 +86,12 @@ Response `201`:
 
 The storefront passes `paypal_order_id` to the PayPal JS SDK v6 for approval. Each call creates a new order.
 
+Validation: 1-20 items, each SKU at most once, `quantity` 1-10, `device_id` 1-128 characters; any other field (such as a
+price) is `422 validation_error`. An unknown SKU is `404 not_found` with `details.sku`. The PayPal order carries the
+priced `items` (category `PHYSICAL_GOODS`) and `amount.breakdown.item_total`; with no `payment_source`, PayPal returns an
+`approve` link and collects the shipping address on its site (`shipping_preference` defaults to `GET_FROM_FILE`). The
+order row is written only after PayPal returns, with an `order.created` event.
+
 ### `POST /payments/orders/{order_id}/authorize`: authorise
 
 Called by `/merchant/decide` (clean and hold branches) and by the Gate A CLI. It first fetches
@@ -92,6 +116,15 @@ Response `200`:
 
 `expires_at` comes from PayPal (holds last 29 days). `honor_period_ends_at` is the authorisation time plus 3 days.
 
+Guards (D3): our order must be `checking` (`409 invalid_state`, `details.status`), and PayPal's `APPROVED`
+(`409 invalid_state`, `details.paypal_status`). The PayPal order fetched here also fills `payer_email` and
+`shipping_address` on our order if they are still empty. If PayPal's order already holds an authorisation (an earlier
+call authorised but didn't store it), that authorisation is stored instead of authorising again. A repeat call after
+success returns the stored authorisation. Writes a `payment.authorized` event.
+
+Reauthorisation (after the honour period, within the 29 days) exists only as a client method in `app/paypal.py`; there
+is no endpoint yet, and the sandbox can't move the clock to test it live.
+
 ### `POST /payments/authorizations/{authorization_id}/capture`: capture
 
 Calls `POST /v2/payments/authorizations/{authorization_id}/capture` (full amount, `final_capture: true`) with
@@ -105,6 +138,12 @@ Request:
 ```
 
 `actor` is `"policy"` or `"reviewer"`. `note` is optional and stored in `events`.
+
+Guards (D3): `actor: "policy"` needs the order in `checking` with a stored `clean` decision; `actor: "reviewer"` needs
+`held`. Otherwise `409 invalid_state` (`details.status`, `details.actor`). On success the order becomes `captured`, and a
+reviewer capture also sets the decision's `resolution: "capture"`, `resolution_note` and `resolved_at`. Events:
+`capture.requested` (before the PayPal call) and `payment.captured` (with `capture_id`, `capture_status`, `actor`,
+`note`). A repeat call after success returns the stored result. An unknown authorisation is `404 not_found`.
 
 Response `201`:
 
@@ -125,6 +164,13 @@ Calls `POST /v2/payments/authorizations/{authorization_id}/void` with `PayPal-Re
 only on a `held` order with `actor: "reviewer"`.
 
 Request: `{"actor": "reviewer", "note": "Buyer unreachable"}`
+
+Any other order status or `actor: "policy"` is `409 invalid_state`. On success the order becomes `voided` and the
+decision gets `resolution: "void"`. Events: `void.requested`, then `payment.voided`. A repeat call on a `voided` order
+(including one voided by the `PAYMENT.AUTHORIZATION.VOIDED` webhook) returns the stored result without calling PayPal.
+
+A PayPal failure on authorise, capture or void returns `502 paypal_error` and writes a `paypal.error` event (`action`,
+`name`, `debug_id`, `issue`); the order's status is unchanged.
 
 Response `200`:
 
@@ -157,7 +203,8 @@ has no payer email, shipping address or device ID yet, the call returns `409 inv
 naming the fields, and no check is created.
 
 The stored `shipping_address` uses the field names of PayPal's order `shipping.address` object, which the backend stores
-unchanged. (Confirm the names against the live Orders v2 response in D3.)
+unchanged: `address_line_1`, `address_line_2`, `admin_area_2`, `admin_area_1`, `postal_code`, `country_code` (PayPal's
+`address_portable`; confirmed in D3 against PayPal's Orders v2 schema and a live sandbox order).
 
 Response `200`:
 
@@ -271,7 +318,15 @@ Every event is first verified with `POST /v1/notifications/verify-webhook-signat
 verified events. A duplicate PayPal event ID returns `200` without acting again.
 
 Responses: `200 {"received": true}` for a verified event, including duplicates and event types we don't handle;
-`400 webhook_unverified` if verification fails.
+`400 webhook_unverified` if verification fails (including missing `PAYPAL-*` headers or an unset `PAYPAL_WEBHOOK_ID`);
+`400 bad_request` if the body isn't a JSON event with `id` and `event_type`; `502 paypal_error` if the verification call
+itself fails (nothing is stored, and PayPal redelivers).
+
+Details (D3): the event is sent to PayPal as the raw bytes received, not re-serialised. An unverified event is stored
+with `verified: false` and `paypal_event_id` null (its claimed ID stays in `payload`), so a forged delivery can't block
+the real event's ID; only verified events deduplicate and act. The order is found by `resource.id` (PayPal order ID) for
+`CHECKOUT.ORDER.*`, otherwise by `resource.custom_id` (our order ID) or `resource.supplementary_data.related_ids.order_id`.
+Actions only follow allowed status transitions; anything else is stored only.
 
 ### Read endpoints (console and storefront)
 
@@ -319,13 +374,15 @@ The console polls it for the live feed.
 
 | Event | Action |
 | --- | --- |
-| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` |
+| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` (the trigger arrives with D4) |
 | `PAYMENT.AUTHORIZATION.CREATED` | Record `authorization_id`, `expires_at` and `honor_period_ends_at` if missing. No status change |
-| `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set the order to `voided` if it isn't already |
-| `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` and set the order to `captured` if it isn't already |
+| `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set a `held` order to `voided` |
+| `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` if missing and set a `checking` or `held` order to `captured` |
 | `CUSTOMER.DISPUTE.CREATED` | Store only. D8 (stretch) drafts evidence with `LLM_MODEL_SMART`; a human submits it |
 
-Confirm the event names in the dashboard's event list during D1.
+Confirmed live in D3 (2026-10-13, sandbox, all signature-verified): `CHECKOUT.ORDER.APPROVED`,
+`PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.CAPTURE.COMPLETED` and `PAYMENT.AUTHORIZATION.VOIDED`. `CUSTOMER.DISPUTE.CREATED`
+is subscribed but hasn't been seen live (D8).
 
 ## Database tables
 
@@ -398,7 +455,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text PK | `evt_...` (ULIDs sort by time) |
-| `source` | text | `paypal_webhook` or `system` (our own actions, e.g. `check.completed`, `decision.made`, `capture.requested`) |
+| `source` | text | `paypal_webhook` or `system` (our own actions: `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`; D4 adds `decision.made`) |
 | `paypal_event_id` | text unique null | Deduplicates webhook deliveries |
 | `event_type` | text | e.g. `PAYMENT.CAPTURE.COMPLETED`, `decision.made` |
 | `order_id` | text null FK -> orders | |
