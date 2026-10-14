@@ -37,24 +37,40 @@ def run_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def consortium(run_dir: Path):
-    """Members A, B, C on spare ports with small synthetic lists (fast PSI)."""
+    """Members A, B, C on spare ports with small synthetic lists (fast PSI).
+
+    Members answer only allowlisted initiators, so the initiator ports of the test apps that
+    use these members are reserved here and passed to each member as `--initiator-url`.
+    """
     data_dir = run_dir / "members"
     write_lists(data_dir, cases.seeded_hashes(), filler_per_member=30)
     (run_dir / "sensitive.txt").write_text("\n".join(cases.sensitive_values()) + "\n")
-    members = {m: MemberProcess(m, free_port(), data_dir, run_dir / "logs") for m in MEMBERS}
+    initiator_ports = {"main": free_port(), "member-down": free_port()}
+    initiator_urls = [f"http://127.0.0.1:{p}" for p in initiator_ports.values()]
+    members = {
+        m: MemberProcess(m, free_port(), data_dir, run_dir / "logs", initiator_urls)
+        for m in MEMBERS
+    }
     try:
         for proc in members.values():
             proc.wait_ready()
-        yield {"data_dir": data_dir, "members": members}
+        yield {
+            "data_dir": data_dir,
+            "members": members,
+            "initiator_ports": initiator_ports,
+            "initiator_urls": initiator_urls,
+        }
     finally:
         for proc in members.values():
             proc.stop()
 
 
-def make_settings(run_dir: Path, name: str, member_urls: dict[str, str], **kw) -> Settings:
+def make_settings(
+    run_dir: Path, name: str, member_urls: dict[str, str], initiator_port: int, **kw
+) -> Settings:
     return Settings(
         database_url=f"sqlite:///{run_dir / f'{name}.db'}",
-        initiator_port=free_port(),
+        initiator_port=initiator_port,
         initiator_key_path=run_dir / "initiator" / "key.json",
         member_urls=member_urls,
         **kw,
@@ -64,6 +80,7 @@ def make_settings(run_dir: Path, name: str, member_urls: dict[str, str], **kw) -
 @pytest.fixture(scope="session")
 def client(run_dir: Path, consortium):
     urls = {m: p.url for m, p in consortium["members"].items()}
-    app = create_app(make_settings(run_dir, "main", urls))
+    port = consortium["initiator_ports"]["main"]
+    app = create_app(make_settings(run_dir, "main", urls, port))
     with TestClient(app) as c:
         yield c

@@ -9,7 +9,7 @@ Any session that changes an interface updates this file in the same change and n
 | --- | --- | --- |
 | Backend (FastAPI) | 8000 | Routers: `/risk`, `/payments`, `/merchant`, `/webhooks` |
 | AP3 initiator (`ap3_initiator` PrivacyAgent, in the backend process) | 8100 | Started in the backend's lifespan. It serves the merchant's AgentCard so members can verify our signed intents |
-| Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it |
+| Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it. Each answers only the initiator URLs on its allowlist (default `http://127.0.0.1:8100`; see "Member list files") |
 | Web (Next.js: storefront + console) | 3000 | Calls the backend only |
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
@@ -139,31 +139,24 @@ Response `200`:
 
 ### `POST /risk/check`: AP3 private check
 
-Called by the risk agent. It normalises and hashes each identifier (see Normalisation), then runs one PSI session per
-identifier per member: 9 sessions, run concurrently (about 3 s in total with ~300-entry lists). Each session stores a receipt. All three identifiers are required. If any of the
-9 sessions fails, the whole check fails: no partial results and no decision.
+Called by the risk agent. It reads the three identifiers from the stored order, never from the caller: `payer_email`
+and `shipping_address` (stored from PayPal after approval) and `device_id` (sent at order creation). It normalises and
+hashes each one (see Normalisation), then runs one PSI session per identifier per member: 9 sessions, run concurrently
+(about 3 s in total with ~300-entry lists). Each session stores a receipt. If any of the 9 sessions fails, the whole
+check fails: no partial results and no decision.
 
 Request:
 
 ```json
-{
-  "order_id": "ord_01JA...",
-  "identifiers": {
-    "email": "Ben.Buyer@Example.com ",
-    "shipping_address": {
-      "address_line_1": "12 Harbour St.",
-      "address_line_2": "Apt 4",
-      "admin_area_2": "Springfield",
-      "admin_area_1": "IL",
-      "postal_code": "62701",
-      "country_code": "US"
-    },
-    "device_id": "dev-ben-91c2"
-  }
-}
+{"order_id": "ord_01JA..."}
 ```
 
-`shipping_address` uses the field names of PayPal's order `shipping.address` object, so the backend passes it through
+The body takes `order_id` only. A body with any other field (for example `identifiers`) is rejected with
+`422 validation_error`, so a caller can't check chosen values or swap clean identifiers in for a risky order. If the order
+has no payer email, shipping address or device ID yet, the call returns `409 invalid_state` with `details.missing`
+naming the fields, and no check is created.
+
+The stored `shipping_address` uses the field names of PayPal's order `shipping.address` object, which the backend stores
 unchanged. (Confirm the names against the live Orders v2 response in D3.)
 
 Response `200`:
@@ -204,7 +197,7 @@ UI never calls this a "member-signed receipt".
 
 `hits` always holds all 9 results, ordered by member and then field as above. `receipts` holds one entry per session (9
 in all; only one is shown above). `hit_count` is the number of `is_match: true` entries. A repeat call for the same
-`order_id` returns the stored check and doesn't rerun PSI, even if the identifiers differ.
+`order_id` returns the stored check and doesn't rerun PSI, even if the order's identifiers have changed since.
 
 The order must exist (`404 not_found` otherwise); this endpoint doesn't change the order's status. If the order's check
 is still `running`, the call returns `409 invalid_state`. If it `failed`, the call reruns PSI on the same `check_id`,
@@ -217,7 +210,8 @@ Each successful or failed check also writes a `system` event: `check.completed` 
 ### `POST /merchant/process`: run the risk agent on an approved order
 
 Called by the storefront's `onApprove` and by the `CHECKOUT.ORDER.APPROVED` webhook handler, whichever comes first. The
-flow: read the order from PayPal (payer email, shipping address), use the stored `device_id`, call `/risk/check`, apply
+flow: read the order from PayPal and store its payer email and shipping address on our order, call `/risk/check`
+(which uses those and the stored `device_id`), apply
 the policy, have `LLM_MODEL_FAST` write the rationale, then call `/merchant/decide`.
 
 Request: `{"order_id": "ord_01JA..."}`
@@ -433,6 +427,11 @@ keeps it. The member reads its list once at startup, refuses to start if the fil
 `sha256` of the sorted list as its commitment's `data_hash`. The initiator's key lives in `backend/var/initiator/key.json`
 so stored receipts can be re-verified after a restart. All of `backend/var/` is git-ignored.
 
+**Initiator allowlist** (ADR 0006): a member answers only initiators whose URL (the first entry of the intent's
+`participants`, compared after the SDK's `normalize_url`) is on its allowlist, set with `--initiator-url` (repeatable;
+default `http://127.0.0.1:8100`). Anything else gets an AP3 error envelope with `error_code: "INITIATOR_NOT_ALLOWED"`,
+before the member fetches any URL, and the backend reports `502 member_unavailable`.
+
 Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
 
 D10 unit-tests these rules. List entries, normalised values and hashes never appear in logs (a CI grep enforces this).
@@ -467,9 +466,9 @@ Every non-2xx response uses this body:
 | 400 | `bad_request` | Malformed JSON or headers |
 | 400 | `webhook_unverified` | Webhook signature verification failed |
 | 404 | `not_found` | Unknown order, check, authorisation or SKU |
-| 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions) |
+| 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions), or the order lacks the identifiers `/risk/check` needs |
 | 409 | `policy_mismatch` | `/merchant/decide` decision differs from the policy result |
-| 422 | `validation_error` | Missing or invalid fields (e.g. a missing identifier); `details` names the fields |
+| 422 | `validation_error` | Missing, invalid or unexpected fields (e.g. `identifiers` sent to `/risk/check`); `details` names the fields |
 | 502 | `paypal_error` | PayPal returned an error; `details` holds PayPal's `name`, `debug_id` and `issue` |
 | 502 | `member_unavailable` | A consortium member didn't complete a PSI session; the check is marked `failed` |
 

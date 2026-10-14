@@ -4,7 +4,7 @@ import copy
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 
 from app.config import MEMBERS
 from app.consortium.initiator import verify_receipt
@@ -17,7 +17,10 @@ from tests.conftest import make_settings
 from tests.harness import MemberProcess, free_port
 
 
-def make_order(app) -> str:
+def make_order(app, identifiers: dict | None = None) -> str:
+    """An order as D3 will leave it after approval: payer email and shipping address from
+    PayPal, device ID from order creation. Without identifiers, the order isn't approved yet."""
+    identifiers = identifiers or {}
     order_id = new_id("ord")
     with app.state.engine.begin() as conn:
         conn.execute(
@@ -35,15 +38,18 @@ def make_order(app) -> str:
                 ],
                 amount_value="49.00",
                 currency_code="USD",
-                device_id="dev-x",
+                device_id=identifiers.get("device_id", "dev-x"),
+                payer_email=identifiers.get("email"),
+                shipping_address=identifiers.get("shipping_address"),
             )
         )
     return order_id
 
 
-def run_check(client: TestClient, identifiers: dict, order_id: str | None = None):
-    order_id = order_id or make_order(client.app)
-    return client.post("/risk/check", json={"order_id": order_id, "identifiers": identifiers})
+def run_check(client: TestClient, identifiers: dict | None = None, order_id: str | None = None):
+    """Store the identifiers on a new order (unless order_id is given), then check the order."""
+    order_id = order_id or make_order(client.app, identifiers)
+    return client.post("/risk/check", json={"order_id": order_id})
 
 
 @pytest.mark.parametrize(
@@ -102,10 +108,12 @@ def test_stored_receipts_reverify_and_tampering_fails(client) -> None:
 
 
 def test_repeat_call_returns_stored_check(client) -> None:
-    order_id = make_order(client.app)
-    first = run_check(client, cases.person("cy"), order_id).json()
-    # Different identifiers on the repeat: the stored check comes back, PSI doesn't rerun.
-    second = run_check(client, cases.person("ana"), order_id)
+    order_id = make_order(client.app, cases.person("cy"))
+    first = run_check(client, order_id=order_id).json()
+    # Even if the order's identifiers changed, the stored check comes back; PSI doesn't rerun.
+    with client.app.state.engine.begin() as conn:
+        conn.execute(update(orders).where(orders.c.id == order_id).values(payer_email="x@y.z"))
+    second = run_check(client, order_id=order_id)
     assert second.status_code == 200
     assert second.json() == first
     with client.app.state.engine.connect() as conn:
@@ -122,29 +130,53 @@ def test_repeat_call_returns_stored_check(client) -> None:
 
 
 def test_running_check_is_409(client) -> None:
-    order_id = make_order(client.app)
+    order_id = make_order(client.app, cases.person("ana"))
     with client.app.state.engine.begin() as conn:
         conn.execute(insert(checks).values(id=new_id("chk"), order_id=order_id, status="running"))
-    response = run_check(client, cases.person("ana"), order_id)
+    response = run_check(client, order_id=order_id)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "invalid_state"
 
 
 def test_unknown_order_is_404(client) -> None:
-    response = run_check(client, cases.person("ana"), "ord_doesnotexist")
+    response = run_check(client, order_id="ord_doesnotexist")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
 
 
-def test_missing_identifier_is_422_without_echoing_values(client) -> None:
-    ids = cases.person("ben")
-    del ids["device_id"]
-    response = run_check(client, ids)
+def test_order_without_payer_details_is_409_and_creates_no_check(client) -> None:
+    order_id = make_order(client.app)  # not approved: no payer email or address yet
+    response = run_check(client, order_id=order_id)
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "invalid_state"
+    assert error["details"]["missing"] == ["email", "shipping_address"]
+    with client.app.state.engine.connect() as conn:
+        assert conn.execute(select(checks).where(checks.c.order_id == order_id)).first() is None
+
+
+def test_caller_supplied_identifiers_are_rejected(client) -> None:
+    """The check must use the order's own identifiers, so the request can't carry any."""
+    order_id = make_order(client.app, cases.person("ben"))
+    response = client.post(
+        "/risk/check",
+        json={"order_id": order_id, "identifiers": cases.person("ana")},
+    )
     assert response.status_code == 422
     error = response.json()["error"]
     assert error["code"] == "validation_error"
-    assert error["details"]["fields"] == ["identifiers.device_id"]
-    assert "ben.buyer" not in response.text
+    assert error["details"]["fields"] == ["identifiers"]
+    assert "ana@example.com" not in response.text
+
+
+def test_initiator_not_on_allowlist_is_refused(run_dir, consortium) -> None:
+    """Members answer only allowlisted initiators: an app on any other port gets 502."""
+    urls = {m: p.url for m, p in consortium["members"].items()}
+    app = create_app(make_settings(run_dir, "not-allowed", urls, free_port()))
+    with TestClient(app) as client:
+        response = run_check(client, cases.person("ben"))
+    assert response.status_code == 502
+    assert response.json()["error"]["details"]["members"] == ["A", "B", "C"]
 
 
 def test_member_down_fails_whole_check_then_rerun_succeeds(run_dir, consortium) -> None:
@@ -153,10 +185,11 @@ def test_member_down_fails_whole_check_then_rerun_succeeds(run_dir, consortium) 
     dead_port = free_port()
     urls = {m: p.url for m, p in consortium["members"].items()}
     urls["C"] = f"http://127.0.0.1:{dead_port}"
-    app = create_app(make_settings(run_dir, "member-down", urls, check_timeout_s=20))
+    port = consortium["initiator_ports"]["member-down"]
+    app = create_app(make_settings(run_dir, "member-down", urls, port, check_timeout_s=20))
     with TestClient(app) as client:
-        order_id = make_order(app)
-        failed = run_check(client, cases.person("cy"), order_id)
+        order_id = make_order(app, cases.person("cy"))
+        failed = run_check(client, order_id=order_id)
         assert failed.status_code == 502
         error = failed.json()["error"]
         assert error["code"] == "member_unavailable"
@@ -172,10 +205,10 @@ def test_member_down_fails_whole_check_then_rerun_succeeds(run_dir, consortium) 
             assert conn.execute(select(receipts).where(receipts.c.check_id == check_id)).all() == []
 
         member_c = MemberProcess(
-            "C", dead_port, consortium["data_dir"], run_dir / "logs"
+            "C", dead_port, consortium["data_dir"], run_dir / "logs", consortium["initiator_urls"]
         ).wait_ready()
         try:
-            rerun = run_check(client, cases.person("cy"), order_id)
+            rerun = run_check(client, order_id=order_id)
         finally:
             member_c.stop()
         assert rerun.status_code == 200, rerun.text

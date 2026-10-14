@@ -23,5 +23,5 @@ The D2 spike (AP3 1.2.2) found three things:
 
 ## Consequences
 - D7 seeds ~300 entries per member.
-- Render needs `allow_private_initiator_urls=True` on members if they reach the initiator over private-network URLs.
+- Render needs `allow_private_initiator_urls=True` on members if they reach the initiator over private-network URLs. That flag turns off the SDK's guard against forged initiator URLs; ADR 0006 adds a per-member allowlist in its place.
 - The README and the who-saw-what panel say who signed what.

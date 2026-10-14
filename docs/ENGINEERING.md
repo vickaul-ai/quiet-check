@@ -30,11 +30,11 @@ Postgres (ADR 0005). D2 writes `checks`, `receipts` and `events`.
 
 ## AP3 risk check (D2)
 
-`POST /risk/check` hashes the three identifiers (`app/identifiers.py`), then the in-process initiator runs 9 PSI
+`POST /risk/check` reads the three identifiers from the order row (never the request; ADR 0006), hashes them (`app/identifiers.py`), then the in-process initiator runs 9 PSI
 sessions at once (3 members x 3 fields) with a 60 s overall timeout. Any failed session fails the whole check. A
 `RecordingPeerClient` captures the 2 signed intents each session sends (keyed by a per-task context variable, so
 concurrent sessions don't mix), and each receipt is verified before it is stored (`verify_receipt`). Member cards are
-re-fetched once per check so a restarted member's current commitment is recorded. PSI is CPU-bound on the member side,
+re-fetched once per check so a restarted member's current commitment is recorded. Members (`MemberAgent`) answer only allowlisted initiator URLs (`--initiator-url`), checked before the SDK fetches anything. PSI is CPU-bound on the member side,
 so each member serves its 3 sessions one after another; with ~300-entry lists a check takes 2.6-2.8 s on Vic's Mac
 (measured 2026-10-13, `uv run pytest -m slow -s`).
 
@@ -47,7 +47,7 @@ so each member serves its 3 sessions one after another; with ~300-entry lists a 
 | `backend/app/db.py` | The five tables (SQLAlchemy Core) and `make_engine` |
 | `backend/app/identifiers.py` | Shared normalise-and-hash (contracts.md, "Identifier normalisation") |
 | `backend/app/risk.py` | `POST /risk/check`: claim/rerun logic, receipts, events |
-| `backend/app/consortium/member.py` | Member entry point: `python -m app.consortium.member A` |
+| `backend/app/consortium/member.py` | `MemberAgent` (initiator allowlist) and the entry point: `python -m app.consortium.member A` |
 | `backend/app/consortium/initiator.py` | Initiator `PrivacyAgent` (:8100), intent capture, 9-session run, `verify_receipt` |
 | `backend/app/consortium/common.py` | Keys, list files, commitments |
 | `backend/app/errors.py`, `ids.py` | Error body; prefixed ULIDs |
@@ -81,5 +81,7 @@ The SDK logs only session-ID prefixes, but `a2a`'s card resolver logs whole Agen
 commitment `data_hash`, a digest of the whole list, not an entry).
 
 ## Risks
+
+- `/risk/check` has no authentication; keep it off the public surface or add auth in D9 (ADR 0006).
 
 See the Risks table in the build plan; the code-level ones are AP3 SDK drift (D2 spike) and webhook delivery during the demo.

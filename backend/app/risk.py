@@ -4,7 +4,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Engine, delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -20,26 +20,32 @@ logger = logging.getLogger("quietcheck.risk")
 router = APIRouter(prefix="/risk", tags=["risk"])
 
 
-class ShippingAddress(BaseModel):
-    """PayPal's order `shipping.address` field names. Missing parts normalise to ""."""
-
-    address_line_1: str | None = None
-    address_line_2: str | None = None
-    admin_area_2: str | None = None
-    admin_area_1: str | None = None
-    postal_code: str | None = None
-    country_code: str | None = None
-
-
-class Identifiers(BaseModel):
-    email: str = Field(min_length=1)
-    shipping_address: ShippingAddress
-    device_id: str = Field(min_length=1)
-
-
 class CheckRequest(BaseModel):
+    """Only the order ID: the identifiers come from the stored order, never from the caller,
+    so a caller can't check chosen values or swap in clean ones for a risky order."""
+
+    model_config = ConfigDict(extra="forbid")
+
     order_id: str = Field(min_length=1)
-    identifiers: Identifiers
+
+
+def order_identifiers(order_row) -> dict:
+    """The order's payer email and shipping address (from PayPal after approval) and the
+    device ID sent at order creation. 409 if any is missing: the order isn't ready."""
+    identifiers = {
+        "email": order_row.payer_email,
+        "shipping_address": order_row.shipping_address,
+        "device_id": order_row.device_id,
+    }
+    missing = [f for f in FIELDS if not identifiers[f]]
+    if missing:
+        raise APIError(
+            409,
+            "invalid_state",
+            f"Order {order_row.id} has no {', '.join(missing)} yet; it can't be checked.",
+            {"missing": missing},
+        )
+    return identifiers
 
 
 _ORDER = {(m, f): i for i, (m, f) in enumerate((m, f) for m in MEMBERS for f in FIELDS)}
@@ -68,11 +74,16 @@ def check_response(engine: Engine, check_row) -> dict:
 
 
 def _claim_check(engine: Engine, order_id: str):
-    """Return (check_row, run). run is False when a completed check should just be returned."""
+    """Return (check_row, identifiers). identifiers is None when a completed check should just
+    be returned; otherwise this caller owns the (new or rerun) check and must run it."""
     with engine.begin() as conn:
-        if conn.execute(select(orders.c.id).where(orders.c.id == order_id)).first() is None:
+        order_row = conn.execute(select(orders).where(orders.c.id == order_id)).first()
+        if order_row is None:
             raise APIError(404, "not_found", f"Order {order_id} not found.")
         existing = conn.execute(select(checks).where(checks.c.order_id == order_id)).first()
+        if existing is not None and existing.status == "completed":
+            return existing, None
+        identifiers = order_identifiers(order_row)
         if existing is None:
             check_id = new_id("chk")
             try:
@@ -85,9 +96,10 @@ def _claim_check(engine: Engine, order_id: str):
             except IntegrityError:
                 existing = conn.execute(select(checks).where(checks.c.order_id == order_id)).first()
             else:
-                return conn.execute(select(checks).where(checks.c.id == check_id)).first(), True
+                row = conn.execute(select(checks).where(checks.c.id == check_id)).first()
+                return row, identifiers
     if existing.status == "completed":
-        return existing, False
+        return existing, None
     if existing.status == "running":
         raise APIError(409, "invalid_state", f"A check for order {order_id} is already running.")
     # failed: rerun on the same check row, if no concurrent caller claims it first.
@@ -104,7 +116,8 @@ def _claim_check(engine: Engine, order_id: str):
                 409, "invalid_state", f"A check for order {order_id} is already running."
             )
         conn.execute(delete(receipts).where(receipts.c.check_id == existing.id))
-        return conn.execute(select(checks).where(checks.c.id == existing.id)).first(), True
+        row = conn.execute(select(checks).where(checks.c.id == existing.id)).first()
+        return row, identifiers
 
 
 def _fail_check(engine: Engine, check_id: str, order_id: str, code: str, members=()) -> None:
@@ -176,16 +189,11 @@ async def risk_check(body: CheckRequest, request: Request) -> dict:
     if initiator is None:
         raise APIError(502, "member_unavailable", "The AP3 initiator is not running.")
 
-    check_row, run = _claim_check(engine, body.order_id)
-    if not run:
+    check_row, identifiers = _claim_check(engine, body.order_id)
+    if identifiers is None:
         return check_response(engine, check_row)
 
-    ids = body.identifiers
-    hashes = {
-        "email": identifier_hash("email", ids.email),
-        "shipping_address": identifier_hash("shipping_address", ids.shipping_address.model_dump()),
-        "device_id": identifier_hash("device_id", ids.device_id),
-    }
+    hashes = {field: identifier_hash(field, identifiers[field]) for field in FIELDS}
     started = time.perf_counter()
     try:
         results = await initiator.run_check(

@@ -30,6 +30,7 @@ file tracks what exists today.
 - Sandbox only; USD only.
 - Receipts are signed by the merchant (intents and result); a member's only signature is on its commitment (ADR 0004).
 - Members load their lists at startup; reseeding needs a member restart.
+- `/risk/check` has no authentication yet (ADR 0006); the hosted build must keep it off the public surface or add auth.
 
 ## Non-goals
 

@@ -18,12 +18,14 @@ pytestmark = pytest.mark.slow
 def test_check_takes_about_3s_at_300_entries(run_dir) -> None:
     data_dir = run_dir / "members-300"
     write_lists(data_dir, cases.seeded_hashes(), filler_per_member=295)  # ~300 entries each
-    members = [MemberProcess(m, free_port(), data_dir, run_dir / "logs") for m in MEMBERS]
+    initiator_port = free_port()
+    allow = [f"http://127.0.0.1:{initiator_port}"]
+    members = [MemberProcess(m, free_port(), data_dir, run_dir / "logs", allow) for m in MEMBERS]
     try:
         for p in members:
             p.wait_ready()
         urls = {p.member: p.url for p in members}
-        app = create_app(make_settings(run_dir, "timing", urls))
+        app = create_app(make_settings(run_dir, "timing", urls, initiator_port))
         with TestClient(app) as client:
             timings = []
             for name in ("ana", "ben", "cy"):

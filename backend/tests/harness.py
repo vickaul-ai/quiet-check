@@ -33,7 +33,9 @@ def write_lists(data_dir: Path, seeded: dict[str, list[str]], filler_per_member:
 
 
 class MemberProcess:
-    def __init__(self, member: str, port: int, data_dir: Path, log_dir: Path):
+    def __init__(
+        self, member: str, port: int, data_dir: Path, log_dir: Path, initiator_urls: list[str]
+    ):
         self.member, self.port = member, port
         self.url = f"http://127.0.0.1:{port}"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -48,6 +50,7 @@ class MemberProcess:
                 str(port),
                 "--data-dir",
                 str(data_dir),
+                *[arg for url in initiator_urls for arg in ("--initiator-url", url)],
             ],
             cwd=BACKEND_DIR,
             stdout=self._log,
