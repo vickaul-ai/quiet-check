@@ -18,6 +18,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.config import MEMBERS, member_data_dir  # noqa: E402
+from app.consortium.common import list_digest  # noqa: E402
 from app.demo_data import (  # noqa: E402
     build_lists,
     build_member_list,
@@ -31,7 +32,22 @@ from app.personas import persona_emails_from_env  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed the demo member lists.")
     parser.add_argument("--member", choices=MEMBERS, help="write only this member's list")
-    only = parser.parse_args().member
+    parser.add_argument(
+        "--digests",
+        action="store_true",
+        help="write nothing; print MEMBER_DATA_HASHES (each list's commitment data_hash) for the "
+        "backend's /health/deep. Needs all three emails",
+    )
+    args = parser.parse_args()
+    if args.digests:
+        try:
+            lists = build_lists(persona_emails_from_env())
+        except ValueError as exc:
+            print(f"seed: {exc}", file=sys.stderr)
+            return 1
+        print("MEMBER_DATA_HASHES=" + ",".join(f"{m}:{list_digest(lists[m])}" for m in MEMBERS))
+        return 0
+    only = args.member
     members = [only] if only else list(MEMBERS)
     try:
         # One member needs only the emails seeded on its own list (hosted members, D9).

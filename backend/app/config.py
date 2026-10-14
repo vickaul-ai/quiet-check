@@ -52,6 +52,13 @@ def _risk_workflow_task() -> str:
     return os.environ.get("RISK_WORKFLOW_TASK") or (f"{slug}/process_order" if slug else "")
 
 
+def _member_hashes_from_env() -> dict[str, str]:
+    """`MEMBER_DATA_HASHES="A:<hex>,B:<hex>,C:<hex>"` -> {member: hex}."""
+    raw = os.environ.get("MEMBER_DATA_HASHES", "")
+    pairs = (item.split(":", 1) for item in raw.split(",") if ":" in item)
+    return {m.strip(): h.strip().lower() for m, h in pairs}
+
+
 def default_bind_host() -> str:
     return "0.0.0.0" if os.environ.get("RENDER") else "127.0.0.1"
 
@@ -113,6 +120,12 @@ class Settings:
     workflow_fallback_s: float | None = 45.0
     # Seconds between /merchant/start PayPal reads for one order (a public route calls it).
     start_cooldown_s: float = 5.0
+    # Stuck-order sweep (app/sweep.py): how often, and how long `checking` counts as stuck.
+    # None: off (tests); from_env turns it on.
+    sweep_interval_s: float | None = None
+    sweep_after_s: float = 120.0
+    # Expected member list digests for /health/deep, from `scripts/seed.py --digests`.
+    expected_member_hashes: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
@@ -133,6 +146,8 @@ class Settings:
             "initiator_private_key": os.environ.get("INITIATOR_PRIVATE_KEY", ""),
             "api_token": os.environ.get("BACKEND_API_TOKEN", ""),
             "render_api_key": os.environ.get("RENDER_API_KEY", ""),
+            "sweep_interval_s": 60.0,
+            "expected_member_hashes": _member_hashes_from_env(),
             "risk_workflow_task": _risk_workflow_task(),
         }
         return cls(**(values | overrides))

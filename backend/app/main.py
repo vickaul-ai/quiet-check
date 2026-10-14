@@ -4,6 +4,7 @@ D2 added /risk and the in-process AP3 initiator; D3 /catalog, /payments and /web
 /merchant risk agent and read endpoints. See docs/contracts.md.
 """
 
+import asyncio
 import hmac
 import os
 import re
@@ -16,10 +17,12 @@ from app.config import Settings
 from app.consortium.initiator import Initiator
 from app.db import make_engine
 from app.errors import error_response, install_error_handlers
+from app.health import router as health_router
 from app.merchant import router as merchant_router
 from app.payments import router as payments_router
 from app.paypal import PayPalClient
 from app.risk import router as risk_router
+from app.sweep import sweep_forever
 from app.webhooks import router as webhooks_router
 from app.workflow import router as workflow_router
 
@@ -63,9 +66,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             await initiator.start()
             app.state.initiator = initiator
+        sweeper = (
+            asyncio.create_task(sweep_forever(app.state)) if settings.sweep_interval_s else None
+        )
         try:
             yield
         finally:
+            if sweeper is not None:
+                sweeper.cancel()
             if app.state.initiator is not None:
                 await app.state.initiator.stop()
             await app.state.paypal.aclose()
@@ -93,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(merchant_router)
     app.include_router(webhooks_router)
     app.include_router(workflow_router)
+    app.include_router(health_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

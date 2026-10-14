@@ -65,6 +65,8 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: MEMBER_DATA_HASHES # expected list digests for /health/deep (scripts/seed.py --digests)
+        sync: false
       - key: LLM_PROVIDER
         value: anthropic
       - key: LLM_MODEL_FAST

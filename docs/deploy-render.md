@@ -46,6 +46,10 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 ## Day to day
 
 - **Deploys:** push to `main`; each service redeploys after CI passes, only if its paths changed (`buildFilter`).
+- **Deep health:** `curl -H "Authorization: Bearer $BACKEND_API_TOKEN" <backend>/health/deep` reports the database,
+  each member (reachable, URL match, list matches the expected digest) and the workflow task. After changing persona
+  emails, rerun `cd backend && uv run python scripts/seed.py --digests` and update `MEMBER_DATA_HASHES` on the backend.
+- **Stuck orders** are rerun automatically after 2 minutes in `checking` (feed: `reason: sweep`).
 - **Smoke check / warm-up** (e.g. on recording day): `scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"`.
   Paid instances don't sleep, so the times it prints are warm response times.
 - **Logs:** each service's Logs tab. Members log `serving on 0.0.0.0:<port> as http://<their hostname>:<port>,

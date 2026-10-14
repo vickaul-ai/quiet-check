@@ -53,6 +53,29 @@ complete this order"; anything else "Processing". The storefront polls `GET /mer
 
 ## HTTP endpoints
 
+### `GET /health/deep`: what the hosted demo depends on (D9 follow-up)
+
+Needs the API token (`GET /health` stays the open liveness check). Response `200`, also when something is wrong:
+
+```json
+{
+  "ok": true,
+  "database": {"ok": true},
+  "initiator": {"url": "http://quietcheck-backend:8100"},
+  "members": [
+    {"member": "A", "url": "http://quietcheck-member-a:8101", "ok": true, "declared_url": "http://quietcheck-member-a:8101",
+     "url_matches": true, "list_matches_expected": true}
+  ],
+  "workflow": {"configured": true, "task": "quietcheck-risk/process_order"}
+}
+```
+
+A member is read from its AgentCard (`GET <url>/.well-known/agent-card.json`): `declared_url` is its card URL, and
+`list_matches_expected` compares its commitment `data_hash` with `MEMBER_DATA_HASHES` (`null` if not set). A member
+that can't be reached has `ok: false` and `error` (an exception name). No list entries, emails or hashes appear in
+the response. A member never answers membership questions; the digest it already publishes is enough to catch a
+wrong persona email.
+
 ### `GET /catalog`: product catalogue (D3)
 
 The storefront and the shopping agent read the products from here. `backend/app/catalog.json` is the source of truth,
@@ -279,7 +302,7 @@ run: with `RENDER_API_KEY` and the workflow task set, a Render Workflows task ru
 https://api.render.com/v1/task-runs`, task `<RISK_WORKFLOW_SLUG>/process_order`, input `[order_id]`, idempotency key
 the order ID, or `<order_id>:rerun:<n>` for a `failed` order, n = its runs so far; at most 3 reruns per order, either runner); if that call fails, or locally, in the backend process after the
 response. Either way it writes a `risk_agent.started` event (payload `runner`: `render_workflow` with `task_run_id`,
-or `in_process`; one event per task run). If a workflow run hasn't moved the order out of `created`/`approved` 45 s
+or `in_process`; one event per task run; the sweep below adds `reason: sweep`). If a workflow run hasn't moved the order out of `created`/`approved` 45 s
 after it started (`workflow_fallback_s`), the backend runs it in-process and writes `risk_agent.started` with
 `runner: in_process, reason: stalled`. Calls for one order within 5 s of the last are answered without reading
 PayPal or starting anything (`start_cooldown_s`). Unknown order: `404 not_found`. The `CHECKOUT.ORDER.APPROVED` webhook starts the risk agent the
@@ -287,6 +310,11 @@ same way, so with both triggers one task run serves the order.
 
 The task (`process_order`) calls `/merchant/process` (subtask `run_risk_agent`, up to 3 retries on a 5xx or 401; a
 404, 409 or 422 ends the run) and, on a `202`, polls the status endpoint (subtask `wait_for_decision`, up to 90 s).
+
+**Stuck-order sweep (D9 follow-up, `app/sweep.py`):** every 60 s the hosted backend moves orders that have been
+`checking` for over 120 s (longer than any real run) to `failed` with one conditional update and reruns the risk agent
+in-process, at most twice per order, writing `risk_agent.started` with `runner: in_process, reason: sweep`. Off in
+tests.
 
 ### `POST /merchant/process`: run the risk agent on an approved order
 
@@ -658,6 +686,7 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `INITIATOR_HOST` (or `INITIATOR_URL`) | Each member | Optional: the backend's hostname; the member then allows `http://<host>:8100` |
 | `INITIATOR_URL`, `INITIATOR_BIND`, `INITIATOR_PORT` | Backend | The initiator's card URL (default on Render `http://<own internal hostname>:8100`, else `http://127.0.0.1:8100`), listen address (Render `0.0.0.0`, else `127.0.0.1`) and port (`8100`) |
 | `MEMBER_CARD_URL` | Each member | Override for the member's card URL (default on Render `http://<own internal hostname>:<port>`) |
+| `MEMBER_DATA_HASHES` | Backend | Hosted (D9 follow-up): `A:<hex>,B:<hex>,C:<hex>`, the expected commitment `data_hash` of each member's list, printed by `scripts/seed.py --digests` from the persona emails; `/health/deep` compares. Not secret (members publish these digests) |
 | `QC_TEST_POSTGRES_URL` | Backend tests | Optional: run the suite on Postgres, one fresh database per test app (CI does, D9) |
 | `TOOL_APPROVAL_SECRET` | Web (server only) | Optional (D6): HMAC key that signs the copilot's approval requests. Unset: a random per-process key, fine for one local server; set it (`openssl rand -base64 32`) once the web app runs on more than one instance |
 | `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |

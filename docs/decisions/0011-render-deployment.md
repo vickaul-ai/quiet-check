@@ -48,6 +48,10 @@ at $10.
   A `risk_agent.started` event shows which runner took the order.
 - **Feed:** unverified webhook deliveries stay stored but out of `/merchant/events`, since anyone can post to the
   webhook URL.
+- **Deep health and the stuck-order sweep (follow-up, after the first deploy):** `GET /health/deep` (token) reports
+  the database, each member's reachability, URL match and list digest against `MEMBER_DATA_HASHES` (a wrong persona
+  email on member-a held Ana on the first hosted run; the digest catches that without a membership query), and the
+  workflow. Orders stuck in `checking` over 120 s are moved to `failed` and rerun, twice at most.
 - **Postgres in CI:** the backend suite runs on SQLite and on Postgres 18 (`QC_TEST_POSTGRES_URL`).
 
 ## Alternatives considered
@@ -61,6 +65,5 @@ at $10.
 - Locally nothing changes unless the hosted variables are set; `make dev` and the tests run as before.
 - Two triggers per order share one task run; a rerun of a `failed` order is keyed `<order_id>:rerun:<n>`
   and capped at 3 per order, so the public storefront route can't start unlimited runs; it is also rate-limited.
-- An order left `checking` by a crash still isn't recovered (known since D4); the task's wait gives up after 90 s.
 - The per-visitor limit trusts the first `X-Forwarded-For` entry, which a client may be able to forge; the global limit
   and the spend limit bound the cost regardless.
