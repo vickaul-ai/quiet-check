@@ -77,6 +77,9 @@ class Run:
     expect_rationale: str = "llm"
     server: dict[str, str | None] = field(default_factory=dict)
 
+    step: str = "start"
+    pages: list = field(default_factory=list)  # for a screenshot on failure
+
     def mark(self, stage: str) -> None:
         self.marks[stage] = time.monotonic()
 
@@ -113,9 +116,9 @@ async def wait_until_final(console: Console, order_id: str) -> dict:
         await asyncio.sleep(1)
 
 
-async def shot(page: Page, run: Run) -> None:
+async def shot(page: Page, run: Run, n: int = 0) -> None:
     SHOTS.mkdir(parents=True, exist_ok=True)
-    path = SHOTS / f"{run.label}-{int(time.time())}.png"
+    path = SHOTS / f"{run.label}-{int(time.time())}-{n}.png"
     try:
         await page.screenshot(path=str(path))
         run.problems.append(f"screenshot {path.relative_to(REPO)}")
@@ -127,7 +130,9 @@ async def to_pay_button(browser: Browser, web: str, run: Run, creds: tuple[str, 
     """Shop as the persona and log in to PayPal; return (context, page, popup, pay button)."""
     context = await browser.new_context()
     page = await context.new_page()
+    run.pages = [page]
     run.mark("start")
+    run.step = "chat"
     await page.goto(web)
     await page.get_by_role("radio", name=run.persona["name"]).click()
     await page.get_by_label("Message the shopping agent").fill(PROMPT)
@@ -135,17 +140,22 @@ async def to_pay_button(browser: Browser, web: str, run: Run, creds: tuple[str, 
     button = page.locator("paypal-button")
     await button.wait_for(timeout=90_000)
     run.mark("paypal_button")
+    run.step = "open pop-up"
     await page.wait_for_timeout(1000)  # the SDK wires the click handler after mounting
     async with page.expect_popup(timeout=30_000) as info:
         await button.click()
     popup = await info.value
+    run.pages.append(popup)
     email, password = creds
+    run.step = "PayPal email"
     await popup.locator("#email").fill(email, timeout=60_000)
     if await popup.locator("#btnNext").is_visible():
         await popup.locator("#btnNext").click()
+    run.step = "PayPal password"
     await popup.locator("#password").fill(password, timeout=30_000)
     await popup.locator("#btnLogin").click()
     run.mark("logged_in")
+    run.step = "PayPal review page"
     pay = popup.locator(", ".join(PAY_BUTTONS)).or_(popup.get_by_role("button", name=PAY_LABELS))
     await pay.first.wait_for(timeout=60_000)
     return context, page, popup, pay.first
@@ -242,7 +252,15 @@ async def prepare(browser: Browser, web: str, run: Run):
     try:
         context, page, popup, pay = await to_pay_button(browser, web, run, credentials(run.persona))
     except Exception as exc:
-        run.problems.append(f"before approval: {type(exc).__name__}: {str(exc).splitlines()[0]}")
+        run.problems.append(f"at {run.step}: {type(exc).__name__}: {str(exc).splitlines()[0]}")
+        for n, page in enumerate(run.pages):
+            await shot(page, run, n)
+        if len(run.pages) > 1:  # what PayPal offered instead, to fix PAY_LABELS if it changed
+            try:
+                labels = await run.pages[-1].get_by_role("button").all_inner_texts()
+                run.problems.append(f"pop-up buttons: {[x.strip() for x in labels if x.strip()]}")
+            except Exception:
+                pass
         return None
 
     def on_request(request):
