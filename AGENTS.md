@@ -24,5 +24,5 @@ holds or declines the payment through PayPal Orders v2 (sandbox only).
 - Hosting (ADR 0011): Render Blueprint `render.yaml`, region oregon, created by Vic in the dashboard (no Render API key
   here); guide `docs/deploy-render.md`, wizard `scripts/render_setup.sh`. Hosted-only env vars (token gate, console
   password, AP3 keys, internal hostnames) are unset locally, which keeps local behaviour unchanged. The risk agent runs
-  as Render Workflows task `quietcheck-risk/process_order` (`workflow/`) when `RENDER_API_KEY` is set.
+  as Render Workflows task `quietcheck-risk/process_order` (`workflow/`) when `RENDER_API_KEY` is set. The judges' summary is plain HTML in `site/` (free static site `quietcheck-report`). Services stay up until Dec 16, 2026 (judging ends Dec 15).
 - Docs: `docs/PRODUCT.md`, `docs/ENGINEERING.md`, ADRs in `docs/decisions/`.

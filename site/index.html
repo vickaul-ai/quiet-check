@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Quiet Check: a private, cross-merchant fraud check before an AI agent's PayPal payment is captured, held or declined. Built for the PayPal AI Hackathon 2026.">
+<!-- The judges' summary (D13). Served by the quietcheck-report static site on Render (render.yaml). -->
+<title>Quiet Check</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a single reading column (~68ch) with wide breakouts for the flow, the hit grid and the architecture.
+   The visual motif is the signed receipt: mono hashes, hairline ticket edges, decision stamps. */
+:root {
+  --paper: #f5f7f8;
+  --sheet: #ffffff;
+  --ink: #142029;
+  --muted: #55636e;
+  --rule: #d6dde2;
+  --accent: #1f5f8b;       /* ledger blue */
+  --accent-soft: #e3eef6;
+  --clean: #1d7a4a; --clean-soft: #e2f3ea;
+  --hold: #a5650a;  --hold-soft: #fbf0dc;
+  --block: #b23a33; --block-soft: #f8e4e2;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0f161b; --sheet: #162027; --ink: #e4ebef; --muted: #9aa9b3; --rule: #2a3741;
+  --accent: #7db6e0; --accent-soft: #1b2e3c;
+  --clean: #5cc68e; --clean-soft: #15301f; --hold: #e6a94a; --hold-soft: #33280f; --block: #ef7f76; --block-soft: #3a1c1a;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --paper: #0f161b; --sheet: #162027; --ink: #e4ebef; --muted: #9aa9b3; --rule: #2a3741;
+  --accent: #7db6e0; --accent-soft: #1b2e3c;
+  --clean: #5cc68e; --clean-soft: #15301f; --hold: #e6a94a; --hold-soft: #33280f; --block: #ef7f76; --block-soft: #3a1c1a;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 1rem; line-height: 1.6; }
+.wrap { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 4rem; display: grid; gap: 3.25rem; }
+.col { max-width: 42rem; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2.6rem, 7vw, 4.2rem); font-weight: 700; letter-spacing: -0.02em; }
+h2 { font-size: 1.7rem; font-weight: 700; }
+h3 { font-size: 1.12rem; font-weight: 700; }
+p { margin: 0; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.eyebrow { font-family: var(--mono); font-size: .74rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.stack { display: grid; gap: 1rem; }
+.stack-sm { display: grid; gap: .5rem; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+.muted { color: var(--muted); }
+
+/* basis tags (Vic's epistemic standard) */
+.tag { font-family: var(--mono); font-size: .66rem; letter-spacing: .06em; text-transform: uppercase; padding: .08rem .38rem; border-radius: 3px; border: 1px solid currentColor; white-space: nowrap; vertical-align: .12em; }
+.t-meas { color: var(--clean); }
+.t-doc { color: var(--accent); }
+.t-ours { color: var(--hold); }
+
+/* header */
+header { display: grid; gap: 1.25rem; }
+.pitch { font-size: 1.28rem; line-height: 1.5; max-width: 40rem; }
+.links { display: flex; flex-wrap: wrap; gap: .6rem; }
+.links a { font-family: var(--mono); font-size: .82rem; text-decoration: none; border: 1px solid var(--rule); background: var(--sheet); padding: .45rem .75rem; border-radius: 4px; }
+.links a:hover { border-color: var(--accent); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 0; border-block: 1px solid var(--rule); }
+.facts div { padding: .9rem .9rem .9rem 0; display: grid; gap: .15rem; }
+.facts b { font-family: var(--display); font-size: 1.45rem; font-variant-numeric: tabular-nums; }
+.facts span { font-size: .84rem; color: var(--muted); }
+
+/* flow */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1rem; }
+.step { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 1.1rem; display: grid; gap: .45rem; align-content: start; min-width: 0; }
+.step .n { font-family: var(--mono); font-size: .75rem; color: var(--accent); }
+
+/* hit grids */
+.grids { display: grid; grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr)); gap: 1rem; }
+.ticket { background: var(--sheet); border: 1px dashed var(--rule); border-radius: 6px; padding: 1rem; display: grid; gap: .7rem; min-width: 0; }
+.ticket header { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.stamp { font-family: var(--mono); font-size: .72rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: .15rem .5rem; border: 1.5px solid currentColor; border-radius: 3px; transform: rotate(-2deg); }
+.s-clean { color: var(--clean); background: var(--clean-soft); }
+.s-hold { color: var(--hold); background: var(--hold-soft); }
+.s-block { color: var(--block); background: var(--block-soft); }
+table.hits { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: .76rem; }
+table.hits th { font-weight: 400; color: var(--muted); padding: .25rem; text-align: center; }
+table.hits th:first-child { text-align: left; }
+table.hits td { text-align: center; padding: .3rem; border: 1px solid var(--rule); }
+td.hit { background: var(--block-soft); color: var(--block); font-weight: 600; }
+.ticket p { font-size: .86rem; }
+
+/* audience cards */
+.who { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1.5rem 2rem; }
+.who article { display: grid; gap: .45rem; align-content: start; border-top: 2px solid var(--ink); padding-top: .8rem; min-width: 0; }
+.who ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .3rem; }
+
+/* integration tables */
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); }
+.tbl table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .9rem; }
+.tbl th, .tbl td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.tbl th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td:first-child { white-space: nowrap; }
+
+.value { display: grid; grid-template-columns: repeat(auto-fit, minmax(14.5rem, 1fr)); gap: 1rem; }
+.value article { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 1.1rem; display: grid; gap: .6rem; align-content: start; min-width: 0; }
+.value .figure { font-size: .92rem; }
+.value .figure b { display: block; font-family: var(--display); font-size: 2rem; line-height: 1.1; color: var(--accent); font-variant-numeric: tabular-nums; }
+.value p { font-size: .9rem; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 2rem; }
+.two > * { min-width: 0; }
+
+/* USP */
+.usp { background: var(--accent-soft); border-radius: 6px; padding: 1.5rem; display: grid; gap: .9rem; }
+.usp q { font-family: var(--display); font-size: 1.35rem; line-height: 1.35; quotes: none; }
+
+/* architecture */
+.arch { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: 1rem; overflow-x: auto; }
+.arch pre.mermaid { margin: 0; min-width: 40rem; background: transparent; }
+
+ul.plain { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+.sources { font-size: .84rem; color: var(--muted); }
+.sources ol { margin: .5rem 0 0; padding-left: 1.2rem; display: grid; gap: .25rem; word-break: break-word; }
+footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 1rem; }
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">PayPal AI Hackathon 2026 · solo entry by Vic Kaul</span>
+  <h1>Quiet Check</h1>
+  <p class="pitch">When an AI agent buys on someone's behalf, the merchant's own agent privately checks the buyer against other merchants' fraud lists, then uses PayPal to capture, hold or decline the payment. <strong>No merchant ever shares its list.</strong></p>
+  <div class="links">
+    <a href="https://quietcheck-web.onrender.com">Live demo ↗ quietcheck-web.onrender.com</a>
+    <a href="https://github.com/vickaul-ai/quiet-check">Source ↗ github.com/vickaul-ai/quiet-check</a>
+  </div>
+  <div class="facts">
+    <div><b>9</b><span>private checks per order: 3 identifiers × 3 merchants</span></div>
+    <div><b>14–18 s</b><span>buyer approval to final decision, hosted</span></div>
+    <div><b>0</b><span>list entries that ever leave their owner</span></div>
+    <div><b>119</b><span>automated tests, plus live sandbox runs</span></div>
+  </div>
+  <p class="muted" style="font-size:.84rem">Basis tags: <span class="tag t-meas">measured</span> we ran it and timed it · <span class="tag t-doc">documented</span> from a cited source · <span class="tag t-ours">our assessment</span> reasoned, not yet proven.</p>
+</header>
+
+<section class="stack col">
+  <span class="eyebrow">The problem</span>
+  <h2>Agents buy with fewer signals, and merchants fight fraud alone</h2>
+  <p>A purchase made by an AI agent arrives without most of what fraud tools read: no mouse movement, no typing rhythm, no browsing path. Industry reporting from MPE 2026 says agentic transactions strip away the behavioural markers current tools rely on <span class="tag t-doc">documented</span><sup>[1]</sup>, and that fraud liability for agent pilots is still unclear <span class="tag t-doc">documented</span><sup>[2]</sup>.</p>
+  <p>What still identifies a repeat abuser is the plain stuff: email, shipping address, device. The merchant down the road may already have this buyer on its chargeback list. But merchants can't hand customer lists to competitors. Privacy law limits sharing personal data to what is necessary and proportionate <span class="tag t-doc">documented</span><sup>[3]</sup>, and a list is a commercial asset.</p>
+</section>
+
+<section class="stack col">
+  <span class="eyebrow">Why it isn't possible today</span>
+  <h2>Sharing means pooling, and pooling means trusting a third party</h2>
+  <ul class="plain">
+    <li><strong>Fraud networks work by pooling.</strong> Today's shared fraud intelligence runs through a vendor that receives every member's data and sees all of it. Merchants who won't or can't send customer data to a central party are left out. <span class="tag t-ours">our assessment</span></li>
+    <li><strong>Hashing the lists doesn't fix it.</strong> Emails and addresses are guessable, so a hashed list can be reversed by hashing candidate values and comparing. Swapping hashed lists still leaks the list. <span class="tag t-ours">our assessment</span></li>
+    <li><strong>Agent-to-agent private computation is brand new.</strong> AP3, the open protocol that lets agents from different companies compute on private data without revealing it, was contributed by Silence Laboratories to LF Decentralized Trust and is in research preview <span class="tag t-doc">documented</span><sup>[4][5]</sup>.</li>
+    <li><strong>PayPal's agent checkout is gated.</strong> Agent Ready brings PayPal's fraud tools to agent-initiated payments, but access is by request and runs through Braintree, with no public sandbox <span class="tag t-doc">documented</span><sup>[6][7]</sup>. Nothing gives a merchant its own pre-authorisation check that draws on other merchants' data.</li>
+  </ul>
+</section>
+
+<section class="stack">
+  <div class="stack-sm col">
+    <span class="eyebrow">What we built</span>
+    <h2>One order, start to finish</h2>
+  </div>
+  <div class="flow">
+    <div class="step"><span class="n">1 · Shop</span><h3>An agent buys</h3><p>The buyer tells the shopping agent "buy the blue backpack in medium". It finds the item, builds the cart and creates a PayPal order with intent <code>AUTHORIZE</code>. The buyer approves in the PayPal pop-up.</p></div>
+    <div class="step"><span class="n">2 · Check</span><h3>Nine private questions</h3><p>The merchant's risk agent asks three consortium merchants whether they hold the buyer's email, address or device. Each answer is a yes or no from AP3 private set intersection. Each merchant learns nothing about the query, and every session is recorded as a signed receipt.</p></div>
+    <div class="step"><span class="n">3 · Decide</span><h3>A fixed rule, explained by AI</h3><p>0 hits: authorise and capture. 1 hit: authorise only and hold for review. 2 or more: don't authorise. Claude writes a 2–3 sentence explanation. It can explain the decision but never change it.</p></div>
+    <div class="step"><span class="n">4 · Review</span><h3>A human closes the hold</h3><p>In the merchant console the reviewer sees the receipts, a 3×3 hit grid and a "who saw what" panel. They ask the copilot about the hold, and on their instruction plus one Approve click it captures or voids the payment in PayPal.</p></div>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="stack-sm col">
+    <span class="eyebrow">The three demo buyers</span>
+    <h2>Same shop, same item, three outcomes</h2>
+    <p>All data is synthetic: each member merchant holds about 300 entries, with the personas seeded on purpose. Results below are from three back-to-back hosted runs on 2026-10-14; all 9 orders came out right <span class="tag t-meas">measured</span>.</p>
+  </div>
+  <div class="grids">
+    <div class="ticket">
+      <header><h3>Ana</h3><span class="stamp s-clean">Captured</span></header>
+      <table class="hits" aria-label="Ana's hits by member and field">
+        <tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><th>email</th><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>address</th><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>device</th><td>·</td><td>·</td><td>·</td></tr>
+      </table>
+      <p>0 hits. Paid in one step. Buyer sees <em>"Paid"</em>.</p>
+    </div>
+    <div class="ticket">
+      <header><h3>Ben</h3><span class="stamp s-hold">Held</span></header>
+      <table class="hits" aria-label="Ben's hits by member and field">
+        <tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><th>email</th><td>·</td><td class="hit">hit</td><td>·</td></tr>
+        <tr><th>address</th><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>device</th><td>·</td><td>·</td><td>·</td></tr>
+      </table>
+      <p>1 hit. Funds authorised and held, not taken. A reviewer decides. Buyer sees <em>"Payment on hold for review"</em>.</p>
+    </div>
+    <div class="ticket">
+      <header><h3>Cy</h3><span class="stamp s-block">Blocked</span></header>
+      <table class="hits" aria-label="Cy's hits by member and field">
+        <tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+        <tr><th>email</th><td class="hit">hit</td><td>·</td><td class="hit">hit</td></tr>
+        <tr><th>address</th><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>device</th><td class="hit">hit</td><td>·</td><td class="hit">hit</td></tr>
+      </table>
+      <p>4 hits. Never authorised, so no money moves. Buyer sees <em>"We couldn't complete this order"</em>.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="stack-sm col">
+    <span class="eyebrow">Who it's for</span>
+    <h2>Who uses it, and what each gets</h2>
+  </div>
+  <div class="who">
+    <article>
+      <h3>The merchant</h3>
+      <p class="muted">Users: the merchant's risk agent runs every order automatically. A fraud reviewer works the console.</p>
+      <ul>
+        <li>A fraud signal drawn from other merchants' experience, before any money moves.</li>
+        <li>Three graded outcomes instead of pass/fail, so a single weak signal costs a review, not a lost sale.</li>
+        <li>A signed receipt for every check, ready as evidence if the order is disputed.</li>
+      </ul>
+      <p><span class="tag t-ours">our assessment</span></p>
+    </article>
+    <article>
+      <h3>Consortium members</h3>
+      <p class="muted">Users: other merchants who run a member agent next to their own abuse list.</p>
+      <ul>
+        <li>They help stop fraud without giving up their list, and never learn who was asked about.</li>
+        <li>Each publishes a signed commitment to its list (size, format, digest), so the checking merchant knows which list answered.</li>
+        <li>The same fraud protection comes back to them as initiators.</li>
+      </ul>
+      <p><span class="tag t-ours">our assessment</span></p>
+    </article>
+    <article>
+      <h3>PayPal</h3>
+      <p class="muted">PayPal's role: the payment rail that carries out the decision.</p>
+      <ul>
+        <li>PayPal's stated stance in agentic commerce is to be the trusted execution layer whichever agent protocol wins <span class="tag t-doc">documented</span><sup>[8]</sup>. Quiet Check gives merchants a reason to trust agent orders on PayPal.</li>
+        <li>Authorise-then-capture puts PayPal's hold, capture and void at the centre of the merchant's risk flow.</li>
+        <li>Fewer fraudulent captures should mean fewer disputes and chargebacks to handle. <span class="tag t-ours">our assessment</span></li>
+        <li>PayPal could host the consortium directory as a service for its merchants. <span class="tag t-ours">our assessment</span></li>
+      </ul>
+    </article>
+    <article>
+      <h3>The consumer</h3>
+      <p class="muted">The buyer, or the person whose agent is buying.</p>
+      <ul>
+        <li>Honest buyers pay at once. Ana's order is captured in seconds with no extra step <span class="tag t-meas">measured</span>.</li>
+        <li>One stray signal holds the payment for a human instead of declining it outright.</li>
+        <li>Their email, address and device are never sent in readable form to other merchants. Only blinded values cross the wire.</li>
+        <li>A stolen account used by someone else's agent is more likely to be stopped. <span class="tag t-ours">our assessment</span></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section class="stack">
+  <div class="stack-sm col">
+    <span class="eyebrow">What it's worth</span>
+    <h2>Trust, cost and conversion, where agent commerce is weakest</h2>
+    <p>Industry numbers show where the pain is. Quiet Check is built to move each one; how much it moves them in production is not yet measured.</p>
+  </div>
+  <div class="value">
+    <article>
+      <h3>Trust</h3>
+      <p class="figure"><b>55%</b> of US and UK consumers are uncomfortable letting an AI agent buy for them, and 54% think AI could raise fraud risk <span class="tag t-doc">documented</span><sup>[9]</sup>.</p>
+      <p><strong>Quiet Check:</strong> every agent order gets a peer fraud check before money moves, and every decision has a signed, verifiable receipt. Buyers' details never reach other merchants in readable form. Trust in agent checkout is what PayPal needs for agent volume to grow <span class="tag t-ours">our assessment</span>.</p>
+    </article>
+    <article>
+      <h3>Cost</h3>
+      <p class="figure"><b>$4.61</b> is what each $1 of fraud costs a US retail or ecommerce merchant once chargebacks, fees, labour and replacement goods are counted <span class="tag t-doc">documented</span><sup>[10]</sup>.</p>
+      <p><strong>Quiet Check:</strong> a blocked order is never authorised, so no capture, refund or chargeback follows. Manual review is spent only on single-hit orders, and the receipts are ready-made dispute evidence <span class="tag t-ours">our assessment</span>.</p>
+    </article>
+    <article>
+      <h3>Conversion</h3>
+      <p class="figure"><b>32%</b> of US consumers say they stop shopping with a merchant after being declined <span class="tag t-doc">documented</span><sup>[11]</sup>. False declines cost US merchants more than card fraud itself, by Javelin's estimate <span class="tag t-doc">documented</span><sup>[11]</sup>.</p>
+      <p><strong>Quiet Check:</strong> one weak signal holds the funds for a human instead of declining. Clean buyers are captured in seconds with no extra step <span class="tag t-meas">measured</span>. Fewer false declines should keep more good customers coming back <span class="tag t-ours">our assessment</span>.</p>
+    </article>
+    <article>
+      <h3>Network effect for PayPal</h3>
+      <p class="figure">PayPal aims to be the trusted execution layer for agent payments, whichever protocol wins <span class="tag t-doc">documented</span><sup>[8]</sup>.</p>
+      <p><strong>Quiet Check:</strong> each merchant that joins makes the check better for every other, and the action at the end is always a PayPal authorise, capture or void. PayPal could run the consortium directory without ever holding a member's list <span class="tag t-ours">our assessment</span>.</p>
+    </article>
+  </div>
+</section>
+
+<section class="two">
+  <div class="stack">
+    <span class="eyebrow">PayPal integration</span>
+    <h2>Real sandbox calls, end to end</h2>
+    <p>Every PayPal call in the demo hits the live sandbox. Nothing on screen is mocked.</p>
+    <div class="tbl"><table>
+      <tr><th>PayPal piece</th><th>What we use it for</th></tr>
+      <tr><td>JS SDK v6</td><td>Buyer approval in the PayPal pop-up, started from the agent's order</td></tr>
+      <tr><td>Orders v2</td><td>Create with intent <code>AUTHORIZE</code> (priced by our backend, never the agent); read payer email and shipping after approval; authorise</td></tr>
+      <tr><td>Payments v2</td><td>Capture a clean order; capture or void a held one on the reviewer's instruction</td></tr>
+      <tr><td>Webhooks</td><td><code>CHECKOUT.ORDER.APPROVED</code> starts the risk agent; signatures verified, events deduped</td></tr>
+      <tr><td>Idempotency</td><td><code>PayPal-Request-Id</code> on every money-moving call, so retries can't double-charge</td></tr>
+      <tr><td>Honour period</td><td>The console counts down PayPal's 3-day window for capturing a hold</td></tr>
+    </table></div>
+  </div>
+  <div class="stack">
+    <span class="eyebrow">Silence Laboratories integration</span>
+    <h2>AP3 private set intersection</h2>
+    <p>The consortium runs on the open-source AP3 SDK (<code>ap3[a2a]</code>, <code>ap3-functions</code> 1.2.2), Silence Laboratories' protocol for privacy-preserving work between agents <span class="tag t-doc">documented</span><sup>[4]</sup>.</p>
+    <div class="tbl"><table>
+      <tr><th>AP3 piece</th><th>What we use it for</th></tr>
+      <tr><td>A2A agents</td><td>Members A, B and C are separate A2A servers, each holding only its own list</td></tr>
+      <tr><td>AgentCards</td><td>Roles (initiator, receiver) and each member's signed commitment to its list</td></tr>
+      <tr><td>PSI</td><td>9 sessions per order, run at once: "is this value in your set?", answered yes or no</td></tr>
+      <tr><td>Directives</td><td>Each session's signed intents are captured; receipts are verified before they are stored</td></tr>
+      <tr><td>Who saw what</td><td>The console states plainly what each party learned</td></tr>
+    </table></div>
+  </div>
+</section>
+
+<section class="stack col">
+  <span class="eyebrow">Where the AI works</span>
+  <h2>AI does the talking, a rule moves the money</h2>
+  <ul class="plain">
+    <li><strong>Shopping agent</strong> (Claude Haiku 5.5, Vercel AI SDK): turns a sentence into a search, a cart and a PayPal order in one turn.</li>
+    <li><strong>Risk rationale</strong> (Claude Haiku 5.5, LangChain): explains each decision in 2–3 sentences from the hit summary only, never from raw lists. If the model fails, a template stands in.</li>
+    <li><strong>Review copilot</strong> (Claude Haiku 5.5): answers "why is this on hold?" and captures or voids, but only after the reviewer clicks Approve on a card showing the order, amount and action.</li>
+    <li><strong>Guardrail:</strong> the backend recomputes the policy from the stored receipts and rejects any decision the policy didn't make. Models sit behind a swap layer; a swap to Sonnet was tested live <span class="tag t-meas">measured</span>.</li>
+  </ul>
+</section>
+
+<section class="usp">
+  <span class="eyebrow">Unique selling proposition</span>
+  <q>Fraud intelligence from your peers, before you take the money, without anyone handing over a list.</q>
+  <p>What's new is the combination: cryptographic privacy between competing merchants, an agent-native protocol (AP3 over A2A), PayPal's authorise-hold-capture turned into graded outcomes, and a signed audit trail for every decision. The AI explains and assists but can't move money on its own. We know of no shipping product that does this for agent-initiated payments <span class="tag t-ours">our assessment</span>.</p>
+</section>
+
+<section class="stack">
+  <div class="stack-sm col">
+    <span class="eyebrow">Architecture</span>
+    <h2>Seven pieces on Render, one private network</h2>
+    <p>Only the shop and the backend are public. The backend accepts unauthenticated calls only for health, PayPal's signed webhooks and the order status; everything else needs a token. Members are private services that answer only the backend's AP3 initiator.</p>
+  </div>
+  <div class="arch">
+<pre class="mermaid">
+flowchart LR
+  buyer([Buyer]) --> web
+  reviewer([Fraud reviewer]) --> web
+  subgraph render [Render · private network · oregon]
+    web["Web · Next.js<br/>shop + shopping agent<br/>console + review copilot"]
+    backend["Backend · FastAPI<br/>risk agent · policy · payments<br/>AP3 initiator :8100"]
+    wf["Render Workflow<br/>process_order task<br/>retries, durable runs"]
+    db[("Postgres<br/>orders · checks · receipts<br/>decisions · events")]
+    a["Member A<br/>own list"]
+    b["Member B<br/>own list"]
+    c["Member C<br/>own list"]
+    web -->|token| backend
+    backend -->|start run| wf
+    wf -->|/merchant/process| backend
+    backend --- db
+    backend <-->|AP3 PSI| a
+    backend <-->|AP3 PSI| b
+    backend <-->|AP3 PSI| c
+  end
+  web -.->|JS SDK v6 pop-up| paypal
+  backend <-->|Orders v2 · Payments v2| paypal[(PayPal sandbox)]
+  paypal -->|signed webhooks| backend
+  web -->|AI SDK| claude[(Claude API)]
+  backend -->|LangChain| claude
+</pre>
+  </div>
+  <div class="tbl"><table>
+    <tr><th>Layer</th><th>Choice</th></tr>
+    <tr><td>Backend</td><td>Python 3.12, FastAPI, SQLAlchemy Core; SQLite locally, Postgres on Render</td></tr>
+    <tr><td>Consortium</td><td>AP3 SDK 1.2.2; three member agents as Render private services</td></tr>
+    <tr><td>Web</td><td>Next.js 16, React 19, Tailwind 4, Vercel AI SDK v7</td></tr>
+    <tr><td>Orchestration</td><td>Render Workflows runs each order's check → decide → PayPal action, with retries; an in-process fallback takes over within 45 s if a run stalls</td></tr>
+    <tr><td>Operations</td><td>Deep health check (database, each member's list digest, workflow); a sweep reruns orders stuck mid-check; hourly synthetic check with failure email</td></tr>
+  </table></div>
+</section>
+
+<section class="stack col">
+  <span class="eyebrow">Evidence it works</span>
+  <h2>Tested on the hosted build, including when things break</h2>
+  <ul class="plain">
+    <li><strong>Persona runs:</strong> Ana, Ben and Cy through the real shop and PayPal pop-up, driven by a browser script. Every order had 9 of 9 receipts verified and an AI rationale <span class="tag t-meas">measured</span>.</li>
+    <li><strong>Speed:</strong> about 9–11 s from the start of the risk run to the decision; 14–18 s from the buyer's approval <span class="tag t-meas">measured</span>.</li>
+    <li><strong>Failure drills, all passed:</strong> a member taken offline (order fails safe, then reruns to the right answer), a broken workflow token (fallback decides), a bad AI key (template rationale), PayPal webhooks rejected (the pop-up path alone decides), a redeploy mid-order (no order lost), and the chat rate limit <span class="tag t-meas">measured</span>.</li>
+    <li><strong>Privacy check in CI:</strong> every test run's logs are scanned and the build fails if any list entry or test identifier appears <span class="tag t-meas">measured</span>.</li>
+  </ul>
+</section>
+
+<section class="stack col">
+  <span class="eyebrow">Limits</span>
+  <h2>What this demo doesn't claim</h2>
+  <ul class="plain">
+    <li>AP3 is a research preview: its proof fields are placeholders, and PSI is the only operation in the public SDK.</li>
+    <li>PSI tells the checking merchant which member matched which field. The console says so; "count only" is future work.</li>
+    <li>PSI alone doesn't prove a member used the list it committed to.</li>
+    <li>Receipts are signed by the checking merchant. In AP3 1.2.2 members sign only their commitment.</li>
+    <li>Agent Ready, ACP and UCP are gated, so our shopping agent stands in for them. The merchant side would be the same.</li>
+    <li>Sandbox only, USD only, synthetic data. Several judges approving at the same moment can each wait up to about 40 s, because members' PSI is CPU-bound <span class="tag t-meas">measured</span>.</li>
+  </ul>
+</section>
+
+<section class="sources">
+  <span class="eyebrow">Sources</span>
+  <ol>
+    <li>The Paypers, "Key takeaways from MPE 2026": <a href="https://thepaypers.com/payments/expert-views/key-takeaways-from-mpe-2026">thepaypers.com</a></li>
+    <li>Recorded Future, Annual Payment Fraud Intelligence Report 2025: <a href="https://assets.recordedfuture.com/Reports/Annual_Payment_Fraud_Intelligence_Report_2025.pdf">recordedfuture.com</a>; Ravelin 2026 report via <a href="https://ibsintelligence.com/?p=573981">IBS Intelligence</a></li>
+    <li>Ethoca / PYMNTS, "GDPR &amp; PSD2: A Silver Lining For Fraudsters?": <a href="https://pymnts.com/?p=499053">pymnts.com</a></li>
+    <li>AP3 on PyPI (LF Decentralized Trust, contributed by Silence Laboratories): <a href="https://pypi.org/project/ap3/">pypi.org/project/ap3</a>; <a href="https://silencelaboratories.com/ap3">silencelaboratories.com/ap3</a></li>
+    <li>AP3 protocol and PSI function: <a href="https://ap3-protocol.org/functions/psi/">ap3-protocol.org/functions/psi</a></li>
+    <li>PayPal, "PayPal Launches Agentic Commerce Services" (Oct 28, 2025): <a href="https://newsroom.paypal-corp.com/2025-10-28-PayPal-Launches-Agentic-Commerce-Services-to-Power-AI-Driven-Shopping">newsroom.paypal-corp.com</a></li>
+    <li>PayPal Agent Ready overview: <a href="https://docs.paypal.ai/growth/agentic-commerce/agent-ready/overview">docs.paypal.ai</a></li>
+    <li>Commentary on PayPal's agentic strategy: <a href="https://eco.com/support/en/articles/14730447-paypal-agentic-commerce-explained">eco.com</a></li>
+    <li>Riskified consumer survey, Q1 2026 (US and UK), via <a href="https://forkast.news/73-use-ai-for-shopping-55-wont-let-it-buy-anything-the-trust-gap-is-widening/">Forkast</a> and <a href="https://www.businesswire.com/news/home/20260427900819/en/">Business Wire</a></li>
+    <li>LexisNexis Risk Solutions, True Cost of Fraud: Ecommerce and Retail, 2025 (survey of 569 executives): <a href="https://risk.lexisnexis.com/about-us/press-room/press-release/20250402-tcof-ecommerce-and-retail">risk.lexisnexis.com</a></li>
+    <li>Javelin research on false declines (older study; 3,200 US consumers), summarised by <a href="https://www.pymnts.com/?p=171728">PYMNTS</a> and <a href="https://www.clear.sale/blog/understanding-the-true-cost-of-false-declines">ClearSale</a></li>
+  </ol>
+  <p style="margin-top:.6rem">PayPal authorisation rules (29-day hold, 3-day honour period): <a href="https://developer.paypal.com/docs/checkout/standard/customize/authorization/">developer.paypal.com</a>. Measurements come from the project's test log, 2026-10-13 and 2026-10-14.</p>
+</section>
+
+<footer>Quiet Check is open source under Apache-2.0. Built on the PayPal sandbox, the AP3 SDK, Claude and Render. Not affiliated with or endorsed by PayPal or Silence Laboratories.</footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, securityLevel: "strict",
+    theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral" });
+</script>
+</body>
+</html>

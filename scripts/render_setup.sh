@@ -254,7 +254,7 @@ note "  quietcheck-db (Postgres basic-256mb, \$6/mo)"
 note "  quietcheck-backend, quietcheck-web (web, Starter \$7/mo each)"
 note "  quietcheck-member-a/b/c (private services, Starter \$7/mo each)"
 note "  quietcheck-risk (workflow, billed per second of task runs)"
-say "About \$41/month in all. Keep them until Nov 30, 2026 (decided with Vic)."
+say "About \$41/month in all. Keep them until Dec 16, 2026, the day after judging ends (decided with Vic)."
 confirm "Create these paid services now?" || { warn "Stopped before creating anything."; exit 1; }
 open_url "https://dashboard.render.com/blueprints"
 step "New Blueprint Instance > connect GitHub repo $REPO_SLUG (grant Render access if asked)."
@@ -353,4 +353,4 @@ pause "Press Enter when done (note anything odd for the D9 session)"
 
 finish
 say "Next: tell the D9 session the results (and paste any errors). Keep the services until"
-say "Nov 30, 2026, then suspend or delete them in the Render dashboard."
+say "Dec 16, 2026, then suspend or delete them in the Render dashboard."

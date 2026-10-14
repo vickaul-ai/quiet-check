@@ -12,8 +12,9 @@ the variables.
 | `quietcheck-web` | Web service (Node) | Starter ($7/mo) | Yes | Shop public; `/console` behind `CONSOLE_PASSWORD` |
 | `quietcheck-member-a`, `-b`, `-c` | Private services (Python) | Starter ($7/mo each) | No | Seed their own list at start; answer only the backend's initiator |
 | `quietcheck-risk` | Workflow (Python) | Per second of task runs | No | One `process_order` run per approved order |
+| `quietcheck-report` | Static site | Free | Yes | The judges' summary, `site/index.html` (plain HTML, no build) |
 
-About $41/month in all, from mid-October to Nov 30, 2026 (decided with Vic). Everything is in `oregon`.
+About $41/month in all, from mid-October to Dec 16, 2026: the rules require the demo to stay testable until judging ends (Dec 15, 8:00 am PT; decided with Vic, 2026-10-14, extended from Nov 30). Everything is in `oregon`.
 
 ## First deploy
 
@@ -86,8 +87,8 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 - **Keys:** `INITIATOR_PRIVATE_KEY` and `MEMBER_PRIVATE_KEY` are generated once; don't change them. Stored receipts
   keep their `verified` flag, but re-verifying an old receipt needs the initiator key that signed it.
 
-## Shutting down (Nov 30, 2026)
+## Shutting down (Dec 16, 2026, after judging ends)
 
 Delete the Blueprint's services and database in the Render dashboard (or suspend them), revoke the Render API key and
 the Anthropic key, delete the hosted webhook in the PayPal dashboard, and disable the hourly check
-(`gh workflow disable hosted-check.yml`; it also skips itself after Nov 30).
+(`gh workflow disable hosted-check.yml`; it also skips itself after Dec 15).

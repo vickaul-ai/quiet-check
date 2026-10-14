@@ -2,7 +2,7 @@
 _Date: 2026-10-14 · Status: accepted_
 
 ## Context
-D9 hosts the demo on Render for judges until Nov 30, 2026. Locally the backend's money and read endpoints, the console
+D9 hosts the demo on Render for judges until Nov 30, 2026 (extended to Dec 16 on 2026-10-14: judging runs Dec 1-15). Locally the backend's money and read endpoints, the console
 and the chats are open, the AP3 parties find each other on `127.0.0.1`, keys and member lists live in the git-ignored
 `backend/var/`, and the risk agent runs inside the backend. The Render sponsor prize asks for Render Workflows. Vic
 creates the services in the dashboard (the session has no Render API key) and set the budget: about $41/month, AI spend capped

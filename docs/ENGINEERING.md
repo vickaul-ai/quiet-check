@@ -138,6 +138,7 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 | `scripts/check_hosted.sh` | Hosted smoke check; with `BACKEND_API_TOKEN` also `/health/deep` |
 | `scripts/e2e_hosted.py` | `make e2e-hosted` (D10, Gate C): the personas through the hosted shop and PayPal pop-up (Playwright), checked through the console routes; `--count N --together` for concurrency |
 | `prompts/` | LLM prompts, one file per task |
+| `site/index.html` | The judges' summary, served by the `quietcheck-report` static site (no build step) |
 | `.github/workflows/ci.yml` | CI: ruff + pytest; eslint + type-check |
 | `.github/workflows/hosted-check.yml` | Hourly hosted check (D10); emails on failure; `force_fail` input |
 

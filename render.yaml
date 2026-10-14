@@ -1,7 +1,8 @@
 # Render Blueprint for the hosted demo (D9; docs/deploy-render.md walks through it).
 # Vic creates it from the Render dashboard (New > Blueprint); nothing here starts paid services
 # by itself. Cost: 5 Starter services ($7/month each) + Basic-256mb Postgres ($6/month) = about
-# $41/month, plus Render Workflows usage (billed per second while a task runs).
+# $41/month, plus Render Workflows usage (billed per second while a task runs). The judges'
+# summary is a static site, which Render hosts free.
 #
 # Everything runs in one region so the private network connects it all: the web service and the
 # workflow call the backend, the backend's AP3 initiator (:8100) calls the members, and the
@@ -105,6 +106,16 @@ services:
         value: anthropic
       - key: LLM_MODEL_FAST
         value: claude-haiku-5-5
+
+  # The judges' summary (site/index.html): a free static site on Render's CDN, no plan or region.
+  - type: web
+    name: quietcheck-report
+    runtime: static
+    buildCommand: echo "site/ is plain HTML, nothing to build"
+    staticPublishPath: ./site
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["site/**"]
 
   # Consortium members: private services. Each seeds its own list at start (deterministic, so
   # its commitment's data_hash is stable) and keeps its key in MEMBER_PRIVATE_KEY.
