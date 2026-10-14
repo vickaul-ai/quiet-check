@@ -2,7 +2,8 @@
 
 Every delivery is verified with PayPal's verify-webhook-signature API, then stored in `events`.
 Only verified events act or deduplicate: an unverified event is stored with `paypal_event_id`
-NULL (its claimed ID stays in the payload), so a forged delivery can't claim a real event's ID.
+NULL and only its claimed ID and type as payload, so a forged delivery can't claim a real event's
+ID or store arbitrary content. Bodies over 256 KB are refused before they are buffered.
 """
 
 import json
@@ -23,6 +24,25 @@ logger = logging.getLogger("quietcheck.webhooks")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 MAX_BODY_BYTES = 256 * 1024
+
+
+async def read_capped_body(request: Request) -> bytes:
+    """Read the body, refusing anything over MAX_BODY_BYTES without buffering the excess."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise APIError(400, "bad_request", "Webhook body too large.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_BODY_BYTES:
+            raise APIError(400, "bad_request", "Webhook body too large.")
+    return bytes(body)
+
+
+def unverified_payload(event: dict) -> dict:
+    """What we keep of an unverified delivery: the claimed ID and type only, so forged
+    deliveries can't fill the database with arbitrary content."""
+    return {"claimed_id": str(event["id"])[:128], "event_type": str(event["event_type"])[:128]}
 
 
 def find_order_id(conn: Connection, event_type: str, resource: dict) -> str | None:
@@ -87,9 +107,7 @@ def apply_event(conn: Connection, event_type: str, order_id: str, resource: dict
 async def paypal_webhook(request: Request) -> dict:
     engine = request.app.state.engine
     settings = request.app.state.settings
-    raw = await request.body()
-    if len(raw) > MAX_BODY_BYTES:
-        raise APIError(400, "bad_request", "Webhook body too large.")
+    raw = await read_capped_body(request)
     try:
         event = json.loads(raw)
     except ValueError:
@@ -115,11 +133,11 @@ async def paypal_webhook(request: Request) -> dict:
             "id": new_id("evt"),
             "source": "paypal_webhook",
             "paypal_event_id": str(event["id"]) if verified else None,
-            "event_type": event_type,
+            "event_type": event_type[:128],
             "order_id": order_id,
-            "resource_id": resource.get("id"),
+            "resource_id": resource.get("id") if verified else None,
             "verified": verified,
-            "payload": event,
+            "payload": event if verified else unverified_payload(event),
         }
         if not verified:
             conn.execute(insert(events).values(row))

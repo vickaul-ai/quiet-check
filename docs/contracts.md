@@ -322,9 +322,10 @@ Responses: `200 {"received": true}` for a verified event, including duplicates a
 `400 bad_request` if the body isn't a JSON event with `id` and `event_type`; `502 paypal_error` if the verification call
 itself fails (nothing is stored, and PayPal redelivers).
 
-Details (D3): the event is sent to PayPal as the raw bytes received, not re-serialised. An unverified event is stored
-with `verified: false` and `paypal_event_id` null (its claimed ID stays in `payload`), so a forged delivery can't block
-the real event's ID; only verified events deduplicate and act. The order is found by `resource.id` (PayPal order ID) for
+Details (D3): bodies over 256 KB get `400 bad_request` before they are buffered or verified. The event is sent to
+PayPal as the raw bytes received, not re-serialised. An unverified event is stored with `verified: false`,
+`paypal_event_id` and `resource_id` null, and `payload` holding only `{claimed_id, event_type}`, so a forged delivery can't
+block the real event's ID or store arbitrary content; only verified events deduplicate and act. The order is found by `resource.id` (PayPal order ID) for
 `CHECKOUT.ORDER.*`, otherwise by `resource.custom_id` (our order ID) or `resource.supplementary_data.related_ids.order_id`.
 Actions only follow allowed status transitions; anything else is stored only.
 

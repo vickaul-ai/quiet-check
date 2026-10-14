@@ -109,6 +109,7 @@ commitment `data_hash`, a digest of the whole list, not an entry).
 ## Risks
 
 - `/risk/check` has no authentication; keep it off the public surface or add auth in D9 (ADR 0006). The same goes for
-  `/payments/*` authorise, capture and void: they enforce status guards but don't authenticate the caller.
+  `/payments/*` authorise, capture and void: they enforce status guards, but `actor: "reviewer"` is caller-asserted, so
+  anyone who can reach the backend can capture or void a held order. D9 adds auth for all of these (ADR 0007).
 
 See the Risks table in the build plan; the code-level ones are AP3 SDK drift (D2 spike) and webhook delivery during the demo.

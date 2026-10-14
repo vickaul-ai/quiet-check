@@ -32,3 +32,9 @@ can be approved only by a buyer in a browser, and webhooks reach the backend onl
   authorising a hold; `/merchant/process` must move the order to `checking` and call `store_payer_details` first.
 - Live runs need `make dev-backend` stopped, `ngrok http 8000` running, and saved orders used soon after approval (one
   third-party guide says 3 hours; PayPal's docs don't confirm a figure).
+- Not fixed (security review of the D3 commit, deferred to D9 with Vic): the `/payments` actions are unauthenticated and
+  `actor` is whatever the caller claims, so anyone who can reach the backend can capture or void a `held` order (or
+  capture a `checking` order that has a `clean` decision). The guards stop other money moves. D9 adds one internal-auth
+  scheme for `/risk/check`, `/merchant/decide` and the `/payments` actions, or keeps them off the public surface.
+- Fixed in the same review: the webhook body cap now applies while streaming (it used to read the whole body first),
+  and unverified deliveries store only their claimed ID and type.

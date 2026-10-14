@@ -66,6 +66,8 @@ def test_unverified_event_is_stored_without_its_id_and_rejected(api, fake) -> No
     assert row.verified is False
     assert row.paypal_event_id is None  # can't block the real event's ID
     assert row.order_id is None
+    assert row.resource_id is None
+    assert row.payload == {"claimed_id": event["id"], "event_type": "CHECKOUT.ORDER.APPROVED"}
     assert order_row(api, order["order_id"]).status == "created"
 
     assert send(api, event).status_code == 200  # the genuine delivery still acts
@@ -150,3 +152,21 @@ def test_events_that_cant_move_the_order_change_nothing(api, fake) -> None:
         "CUSTOMER.DISPUTE.CREATED",
         "PAYMENT.SALE.COMPLETED",
     }
+
+
+def test_oversized_body_is_refused_before_verification(api, fake) -> None:
+    big = webhook_event("CHECKOUT.ORDER.APPROVED", {"id": "X", "pad": "x" * (300 * 1024)})
+    response = send(api, big)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_request"
+
+    def chunks():  # no Content-Length: the streamed size is still capped
+        yield b'{"id": "WH-1", "event_type": "X", "pad": "'
+        for _ in range(300):
+            yield b"x" * 1024
+        yield b'"}'
+
+    streamed = api.post("/webhooks/paypal", content=chunks(), headers=webhook_headers())
+    assert streamed.status_code == 400
+    assert fake.calls("POST", "/verify-webhook-signature") == []
+    assert webhook_rows(api) == []
