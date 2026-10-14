@@ -162,18 +162,24 @@ def test_start_falls_back_to_in_process_if_render_refuses(hosted, fake) -> None:
         assert api.get(f"/merchant/orders/{order['order_id']}/status").json()["status"] == "held"
 
 
-def test_failed_order_rerun_gets_a_fresh_idempotency_key(hosted, fake) -> None:
+def test_failed_order_reruns_are_numbered_and_capped(hosted, fake) -> None:
     make, calls, _state = hosted
     with make(render_api_key="rnd_test", risk_workflow_task="quietcheck-risk/process_order") as api:
         order = create(api)
+        oid = order["order_id"]
         fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
+        api.post("/merchant/start", json={"order_id": oid})  # first run: key = order ID
         with api.app.state.engine.begin() as conn:
             conn.execute(update(orders).values(status="failed"))
-        for _ in range(3):  # repeated calls for one failure: one key, one recorded run
-            api.post("/merchant/start", json={"order_id": order["order_id"]})
-        keys = {c["idempotencyKey"] for c in calls}
-        assert len(keys) == 1 and keys.pop().startswith(f"{order['order_id']}:rerun:20")
-        assert event_types(api, order["order_id"]).count("risk_agent.started") == 1
+        for _ in range(6):  # the public route called again and again on a failed order
+            api.post("/merchant/start", json={"order_id": oid})
+        assert [c["idempotencyKey"] for c in calls] == [
+            oid,
+            f"{oid}:rerun:1",
+            f"{oid}:rerun:2",
+            f"{oid}:rerun:3",
+        ]
+        assert event_types(api, oid).count("risk_agent.started") == 4
 
 
 # AP3 keys from env vars (hosted disks are wiped on deploy)

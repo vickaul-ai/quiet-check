@@ -276,7 +276,7 @@ order (storing the payer details, as `/merchant/process` does; a PayPal failure 
 PayPal reports `APPROVED` (or `COMPLETED`), starts the risk agent, so a premature call can't use up the order's task
 run: with `RENDER_API_KEY` and the workflow task set, a Render Workflows task run (`POST
 https://api.render.com/v1/task-runs`, task `<RISK_WORKFLOW_SLUG>/process_order`, input `[order_id]`, idempotency key
-the order ID, or `<order_id>:rerun:<when it failed>` for a `failed` order, so repeated calls share one run); if that call fails, or locally, in the backend process after the
+the order ID, or `<order_id>:rerun:<n>` for a `failed` order, n = its workflow runs so far, at most 3 reruns per order); if that call fails, or locally, in the backend process after the
 response. Either way it writes a `risk_agent.started` event (payload `runner`: `render_workflow` with `task_run_id`,
 or `in_process`; one event per task run). Unknown order: `404 not_found`. The `CHECKOUT.ORDER.APPROVED` webhook starts the risk agent the
 same way, so with both triggers one task run serves the order.

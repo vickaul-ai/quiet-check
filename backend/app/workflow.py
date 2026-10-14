@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.config import Settings
 from app.db import events
 from app.merchant import DECIDED, PAYPAL_READY, ProcessRequest, process_in_background
-from app.payments import add_event, fetch_payer_details, iso_z, load_order
+from app.payments import add_event, fetch_payer_details, load_order
 
 logger = logging.getLogger("quietcheck.workflow")
 
@@ -46,20 +46,32 @@ async def start_task_run(settings: Settings, order_id: str, idempotency_key: str
         return str(response.json()["id"])
 
 
+# Task runs one order may get through reruns of a `failed` order, on top of its first run (each
+# run already retries 3 times inside Render). Bounds what the public onApprove route can start.
+MAX_RERUNS = 3
+
+
 async def start_risk_agent(
-    app_state, order_id: str, background: BackgroundTasks, failed_at: str | None = None
-) -> str:
+    app_state, order_id: str, background: BackgroundTasks, rerun: bool = False
+) -> str | None:
     """Start the risk agent on Render Workflows if configured, else in-process. Returns the
-    runner: `render_workflow` or `in_process`.
+    runner (`render_workflow` or `in_process`), or None if the order is out of reruns.
 
     The webhook and `onApprove` share one task run per order (idempotency key = order ID). A
-    rerun of a `failed` order keys on when it failed (`failed_at`), so repeated calls for the
-    same failure share one run too: callers can't start unlimited runs.
+    rerun of a `failed` order is keyed `<order_id>:rerun:<n>`, n = the order's workflow runs so
+    far, and stops after MAX_RERUNS: callers can't start unlimited runs.
     """
     settings: Settings = app_state.settings
     payload: dict = {"runner": "in_process"}
     if settings.render_api_key and settings.risk_workflow_task:
-        key = f"{order_id}:rerun:{failed_at}" if failed_at else order_id
+        key = order_id
+        if rerun:
+            with app_state.engine.connect() as conn:
+                runs = len(_workflow_runs(conn, order_id))
+            if runs > MAX_RERUNS:
+                logger.warning("order %s: no reruns left (%d workflow runs)", order_id, runs)
+                return None
+            key = f"{order_id}:rerun:{runs}"
         try:
             run_id = await start_task_run(settings, order_id, key)
         except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -71,19 +83,20 @@ async def start_risk_agent(
         background.add_task(process_in_background, app_state, order_id)
     with app_state.engine.begin() as conn:
         # Render returns the existing run for a repeated key: record each run once.
-        if payload["runner"] == "in_process" or not _run_recorded(conn, order_id, payload):
+        if payload["runner"] == "in_process" or payload not in _workflow_runs(conn, order_id):
             add_event(conn, "risk_agent.started", order_id, payload)
     logger.info("order %s: risk agent started (%s)", order_id, payload["runner"])
     return payload["runner"]
 
 
-def _run_recorded(conn, order_id: str, payload: dict) -> bool:
+def _workflow_runs(conn, order_id: str) -> list[dict]:
+    """The order's recorded workflow task runs (`risk_agent.started` payloads)."""
     rows = conn.execute(
         select(events.c.payload).where(
             events.c.order_id == order_id, events.c.event_type == "risk_agent.started"
         )
     ).all()
-    return any(row.payload == payload for row in rows)
+    return [row.payload for row in rows if row.payload.get("runner") == "render_workflow"]
 
 
 @router.post("/start")
@@ -104,6 +117,7 @@ async def start(body: ProcessRequest, request: Request, background: BackgroundTa
             request.app.state.engine, request.app.state.paypal, body.order_id
         )
         if paypal_order.get("status") in PAYPAL_READY:
-            failed_at = iso_z(order.updated_at) if status == "failed" else None
-            await start_risk_agent(request.app.state, body.order_id, background, failed_at)
+            await start_risk_agent(
+                request.app.state, body.order_id, background, rerun=status == "failed"
+            )
     return JSONResponse(status_code=202, content={"order_id": body.order_id, "status": status})
