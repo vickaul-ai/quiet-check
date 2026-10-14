@@ -87,6 +87,19 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 - **Keys:** `INITIATOR_PRIVATE_KEY` and `MEMBER_PRIVATE_KEY` are generated once; don't change them. Stored receipts
   keep their `verified` flag, but re-verifying an old receipt needs the initiator key that signed it.
 
+## Before judging (by Nov 30, 2026)
+
+Judging runs Dec 1-15; judges may share the hosted demo at the same time, and each held order can be resolved only
+once.
+
+1. Freeze deploys: from Dec 1, deploy only fixes, one service at a time (see "Redeploy timing").
+2. Check every service's latest deploy names the latest commit, and `scripts/check_hosted.sh` (with
+   `BACKEND_API_TOKEN`) is green, including `/health/deep`.
+3. Check the Anthropic workspace's spend against its limit, and raise it if two weeks of judging could reach it.
+4. Stock held orders for the copilot: `make e2e-hosted ARGS="--persona ben --count 4"` (plus one full
+   `make e2e-hosted` run). The console opens the newest held order first.
+5. The hourly check is green; testing instructions (Devpost) have the sandbox logins and the console password.
+
 ## Shutting down (Dec 16, 2026, after judging ends)
 
 Delete the Blueprint's services and database in the Render dashboard (or suspend them), revoke the Render API key and
