@@ -26,6 +26,7 @@ TOKEN = "test-token-123"
 def hosted(run_dir, fake, model, request):
     """`api` plus a Render API stand-in; build the app with `make(**settings)`."""
     calls: list[dict] = []
+    runs: dict[str, str] = {}
     state = {"status": 202}
 
     def render_api(req: httpx.Request) -> httpx.Response:
@@ -34,7 +35,9 @@ def hosted(run_dir, fake, model, request):
         )
         if state["status"] != 202:
             return httpx.Response(state["status"], json={"message": "nope"})
-        return httpx.Response(202, json={"id": f"trn-{len(calls)}", "status": "pending"})
+        # Like Render: a repeated idempotency key returns the first run.
+        run_id = runs.setdefault(calls[-1]["idempotencyKey"], f"trn-{len(runs) + 1}")
+        return httpx.Response(202, json={"id": run_id, "status": "pending"})
 
     def make(**kw) -> TestClient:
         settings = make_settings(
@@ -166,8 +169,11 @@ def test_failed_order_rerun_gets_a_fresh_idempotency_key(hosted, fake) -> None:
         fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
         with api.app.state.engine.begin() as conn:
             conn.execute(update(orders).values(status="failed"))
-        api.post("/merchant/start", json={"order_id": order["order_id"]})
-        assert calls[0]["idempotencyKey"].startswith(f"{order['order_id']}:rerun:run_")
+        for _ in range(3):  # repeated calls for one failure: one key, one recorded run
+            api.post("/merchant/start", json={"order_id": order["order_id"]})
+        keys = {c["idempotencyKey"] for c in calls}
+        assert len(keys) == 1 and keys.pop().startswith(f"{order['order_id']}:rerun:20")
+        assert event_types(api, order["order_id"]).count("risk_agent.started") == 1
 
 
 # AP3 keys from env vars (hosted disks are wiped on deploy)

@@ -15,11 +15,12 @@ import logging
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from app.config import Settings
-from app.ids import new_id
+from app.db import events
 from app.merchant import DECIDED, PAYPAL_READY, ProcessRequest, process_in_background
-from app.payments import add_event, fetch_payer_details, load_order
+from app.payments import add_event, fetch_payer_details, iso_z, load_order
 
 logger = logging.getLogger("quietcheck.workflow")
 
@@ -46,18 +47,19 @@ async def start_task_run(settings: Settings, order_id: str, idempotency_key: str
 
 
 async def start_risk_agent(
-    app_state, order_id: str, background: BackgroundTasks, rerun: bool = False
+    app_state, order_id: str, background: BackgroundTasks, failed_at: str | None = None
 ) -> str:
     """Start the risk agent on Render Workflows if configured, else in-process. Returns the
     runner: `render_workflow` or `in_process`.
 
-    The webhook and `onApprove` share one task run per order (idempotency key = order ID); a
-    rerun of a `failed` order gets a fresh key.
+    The webhook and `onApprove` share one task run per order (idempotency key = order ID). A
+    rerun of a `failed` order keys on when it failed (`failed_at`), so repeated calls for the
+    same failure share one run too: callers can't start unlimited runs.
     """
     settings: Settings = app_state.settings
     payload: dict = {"runner": "in_process"}
     if settings.render_api_key and settings.risk_workflow_task:
-        key = f"{order_id}:rerun:{new_id('run')}" if rerun else order_id
+        key = f"{order_id}:rerun:{failed_at}" if failed_at else order_id
         try:
             run_id = await start_task_run(settings, order_id, key)
         except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -68,9 +70,20 @@ async def start_risk_agent(
     if payload["runner"] == "in_process":
         background.add_task(process_in_background, app_state, order_id)
     with app_state.engine.begin() as conn:
-        add_event(conn, "risk_agent.started", order_id, payload)
+        # Render returns the existing run for a repeated key: record each run once.
+        if payload["runner"] == "in_process" or not _run_recorded(conn, order_id, payload):
+            add_event(conn, "risk_agent.started", order_id, payload)
     logger.info("order %s: risk agent started (%s)", order_id, payload["runner"])
     return payload["runner"]
+
+
+def _run_recorded(conn, order_id: str, payload: dict) -> bool:
+    rows = conn.execute(
+        select(events.c.payload).where(
+            events.c.order_id == order_id, events.c.event_type == "risk_agent.started"
+        )
+    ).all()
+    return any(row.payload == payload for row in rows)
 
 
 @router.post("/start")
@@ -79,7 +92,8 @@ async def start(body: ProcessRequest, request: Request, background: BackgroundTa
     status if the order is already decided; otherwise 202, and the storefront polls the status.
     Nothing starts until PayPal reports the order approved."""
     with request.app.state.engine.connect() as conn:
-        status = load_order(conn, body.order_id).status
+        order = load_order(conn, body.order_id)
+    status = order.status
     if status in DECIDED:
         return {"order_id": body.order_id, "status": status}
     if status != "checking":
@@ -90,7 +104,6 @@ async def start(body: ProcessRequest, request: Request, background: BackgroundTa
             request.app.state.engine, request.app.state.paypal, body.order_id
         )
         if paypal_order.get("status") in PAYPAL_READY:
-            await start_risk_agent(
-                request.app.state, body.order_id, background, rerun=status == "failed"
-            )
+            failed_at = iso_z(order.updated_at) if status == "failed" else None
+            await start_risk_agent(request.app.state, body.order_id, background, failed_at)
     return JSONResponse(status_code=202, content={"order_id": body.order_id, "status": status})

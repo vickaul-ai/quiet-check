@@ -2,12 +2,13 @@ import "server-only";
 
 import { clientIp } from "./client-ip";
 
-// Rate limits for the two model-backed chat routes (D9). The hosted demo has a $10 model budget,
-// enforced as a spend limit on the Anthropic key; these limits spread it out and stop one visitor
-// using it all. In memory, so they assume one web instance (Render Starter, one instance).
+// Rate limits (D9) for the two model-backed chat routes and the storefront's `onApprove` route.
+// The hosted demo has a $10 model budget, enforced as a spend limit on the Anthropic key; these
+// limits spread it out and stop one visitor using it all. In memory, so they assume one web
+// instance (Render Starter, one instance).
 export const LIMITS = {
   perVisitor: { requests: 20, windowMs: 10 * 60_000 }, // per IP, per route
-  global: { requests: 600, windowMs: 24 * 60 * 60_000 }, // all visitors, both routes together
+  global: { requests: 600, windowMs: 24 * 60 * 60_000 }, // all visitors, both chat routes together
 };
 
 const hits = new Map<string, number[]>();
@@ -24,12 +25,14 @@ function take(key: string, { requests, windowMs }: { requests: number; windowMs:
 }
 
 // A 429 response if this request is over a limit, otherwise null (and the request is counted).
-export function rateLimit(req: Request, route: string): Response | null {
+// `global: false` for routes that don't call the model (they mustn't use up the chats' budget).
+export function rateLimit(req: Request, route: string, { global = true } = {}): Response | null {
   const now = Date.now();
-  const wait = take(`${route}:${clientIp(req)}`, LIMITS.perVisitor, now) || take("global", LIMITS.global, now);
+  const visitor = take(`${route}:${clientIp(req)}`, LIMITS.perVisitor, now);
+  const wait = visitor || (global ? take("global", LIMITS.global, now) : 0);
   if (!wait) return null;
   return Response.json(
-    { error: { code: "rate_limited", message: "The demo's chat limit was reached. Try again later." } },
+    { error: { code: "rate_limited", message: "The demo's request limit was reached. Try again later." } },
     { status: 429, headers: { "Retry-After": String(wait) } },
   );
 }

@@ -48,7 +48,8 @@ at $10.
 
 ## Consequences
 - Locally nothing changes unless the hosted variables are set; `make dev` and the tests run as before.
-- Two triggers per order normally share one task run; a rerun of a `failed` order uses a fresh key.
+- Two triggers per order share one task run; a rerun of a `failed` order is keyed on when it failed, so repeated
+  calls (the storefront route is public) share one run too, and the route is rate-limited per visitor.
 - An order left `checking` by a crash still isn't recovered (known since D4); the task's wait gives up after 90 s.
 - The per-visitor limit trusts the first `X-Forwarded-For` entry, which a client may be able to forge; the global limit
   and the spend limit bound the cost regardless.
