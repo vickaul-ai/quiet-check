@@ -46,6 +46,16 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 ## Day to day
 
 - **Deploys:** push to `main`; each service redeploys after CI passes, only if its paths changed (`buildFilter`).
+  Two pushes in a row can skip a service: on 2026-10-14 the backend never deployed b99a18b because the next commit
+  (web only) landed before CI finished. After quick pushes, check each service's latest deploy names the latest
+  commit, and deploy it by hand if not.
+- **Redeploy timing:** Render keeps the old instance serving for about a minute after the new one starts, and
+  in-flight requests finish (D10 drill: 4 orders across a backend redeploy all decided). But after backend and web
+  redeploy together, the web can't reach `quietcheck-backend:10000` for 1-2 minutes (seen twice). Deploy one at a
+  time, and not just before a demo.
+- **Env var changes** take effect on the next deploy: in the dashboard "Save and deploy", or by API
+  `POST /v1/services/<id>/deploys`; the workflow needs a new version (`POST /v1/workflowversions` with
+  `{"workflowId"}`).
 - **Deep health:** `curl -H "Authorization: Bearer $BACKEND_API_TOKEN" <backend>/health/deep` reports the database,
   each member (reachable, URL match, list matches the expected digest) and the workflow task. After changing persona
   emails, rerun `cd backend && uv run python scripts/seed.py --digests` and update `MEMBER_DATA_HASHES` on the backend.

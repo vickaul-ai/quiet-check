@@ -135,8 +135,11 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 | `web/lib/model.ts`, `env.ts`, `backend.ts`, `personas.ts`, `types.ts` | Model factory, root `.env` loading, backend client, persona loading, shared types and buyer text |
 | `web/public/products/` | Product SVGs (referenced by `catalog.json`'s `image`) |
 | `scripts/check_sandbox.py` | PayPal sandbox OAuth check (uv inline-script dependencies) |
+| `scripts/check_hosted.sh` | Hosted smoke check; with `BACKEND_API_TOKEN` also `/health/deep` |
+| `scripts/e2e_hosted.py` | `make e2e-hosted` (D10, Gate C): the personas through the hosted shop and PayPal pop-up (Playwright), checked through the console routes; `--count N --together` for concurrency |
 | `prompts/` | LLM prompts, one file per task |
 | `.github/workflows/ci.yml` | CI: ruff + pytest; eslint + type-check |
+| `.github/workflows/hosted-check.yml` | Hourly hosted check (D10); emails on failure; `force_fail` input |
 
 ## External services
 
@@ -159,6 +162,11 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 - Hosted (D9): `bash scripts/render_setup.sh` walks through the first deploy; `scripts/check_hosted.sh <backend> <web>`
   smoke-checks it. Details in [deploy-render.md](deploy-render.md). Run the backend suite on Postgres with
   `QC_TEST_POSTGRES_URL=postgresql://user@host:port/postgres uv run pytest` (CI does).
+- Hosted persona run (D10): `make e2e-hosted` (needs `PERSONA_*_PASSWORD` and the console password in `.env`; see
+  `.env.example`). Each order gets a fresh browser context, so no PayPal login carries over between buyers. Failure
+  screenshots go to `backend/var/e2e/`.
+- Logs: every order line on the backend, web and workflow starts `order <id>:`, so one Render log search follows an
+  order. The backend prints its INFO lines only when `RENDER` is set (uvicorn configures only its own loggers).
 - Live PayPal runs (ADR 0007): stop `make dev-backend`, run `ngrok http 8000` (sandbox webhook pointing at it), then
   `make approve-orders` (approve the printed links as a sandbox buyer), then `make test-live` (uses 2 saved orders:
   capture and void) or `make gate-a END=capture|void` (uses 1). `approve-orders` runs with `process_on_approval` off, so
