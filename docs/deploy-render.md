@@ -52,8 +52,11 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
   commit, and deploy it by hand if not.
 - **Redeploy timing:** Render keeps the old instance serving for about a minute after the new one starts, and
   in-flight requests finish (D10 drill: 4 orders across a backend redeploy all decided). But after backend and web
-  redeploy together, the web can't reach `quietcheck-backend:10000` for 1-2 minutes (seen twice). Deploy one at a
-  time, and not just before a demo.
+  redeploy together, the web can't reach `quietcheck-backend:10000` for 1-2 minutes (seen twice). A member can also
+  miss the backend's new instance: on 2026-10-14 Member C's card fetch from `quietcheck-backend:8100` failed until
+  about 4 minutes after the backend went live, so 3 orders went `failed` (`member_unavailable`) while `/health/deep`
+  stayed green (it checks backend to member only). Deploy one at a time, and not just before a demo; after a backend
+  deploy, wait 5 minutes and run `make e2e-hosted ARGS="--persona ana"` before trusting the demo.
 - **Env var changes** take effect on the next deploy: in the dashboard "Save and deploy", or by API
   `POST /v1/services/<id>/deploys`; the workflow needs a new version (`POST /v1/workflowversions` with
   `{"workflowId"}`).
