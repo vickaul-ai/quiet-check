@@ -184,16 +184,18 @@ parses the multipart `input` part and implements require-evidence; `tests/test_d
 - Hosted (D9): `bash scripts/render_setup.sh` walks through the first deploy; `scripts/check_hosted.sh <backend> <web>`
   smoke-checks it. Details in [deploy-render.md](deploy-render.md). Run the backend suite on Postgres with
   `QC_TEST_POSTGRES_URL=postgresql://user@host:port/postgres uv run pytest` (CI does).
-- Sandbox dispute (D8 live acceptance): with the backend reachable by PayPal's webhooks (ngrok locally, or the hosted
-  backend) and `CUSTOMER.DISPUTE.CREATED` on the webhook's event list, buy as Ana until the order is `captured`. Log in
-  at https://www.sandbox.paypal.com as Ana's sandbox buyer, open the payment under Activity and report a problem
-  (Resolution Center), for example "I didn't authorise this" (`UNAUTHORISED`). Within a minute or so the console's
-  order shows "disputed" and a Dispute card with the draft (the webhook can take several minutes in sandbox). Then
-  `make dispute-sandbox ARGS="PP-D-..."` shows its status. Evidence can be sent only in
-  `WAITING_FOR_SELLER_RESPONSE`: from `OPEN` (an inquiry), run `ARGS="PP-D-... --escalate"` (to a claim, `UNDER_REVIEW`),
-  then `ARGS="PP-D-... --require-evidence"` (sandbox only, to `WAITING_FOR_SELLER_RESPONSE`); PayPal says to wait a few
-  minutes after creating a dispute before its actions work. Then edit the draft in the console and press "Submit
-  evidence to PayPal". `ARGS=--list` lists the app's disputes.
+- Sandbox dispute (D8 live acceptance; passed 2026-10-14 on the hosted stack, dispute PP-R-IZG-10191421): with the
+  backend reachable by PayPal's webhooks and `CUSTOMER.DISPUTE.*` on the webhook's event list, buy as Ana until the
+  order is `captured`. Log in at https://www.sandbox.paypal.com as Ana's sandbox buyer, open
+  https://www.sandbox.paypal.com/resolutioncenter, pick the payment and "Report a Problem". "I suspect my account is
+  being used by someone else" (unauthorised) failed in sandbox with "something went wrong on our end"; "I haven't
+  received the item or service" works (item, type and category; "The item hasn't reached me"; refund amount; "No" to
+  contacting the seller; a note; Submit). About 3 minutes later the console's order shows "disputed" with the draft.
+  That inquiry asks only for `PROOF_OF_FULFILLMENT` (tracking), so the console refuses to send a note (`409
+  evidence_needs_details`). Run `make dispute-sandbox ARGS="PP-R-... --escalate"`: within about 15 minutes the claim
+  (`CHARGEBACK` stage) is `WAITING_FOR_SELLER_RESPONSE` and also asks for `OTHER`, with no `--require-evidence` needed.
+  Then edit the draft in the console and press "Submit evidence to PayPal": PayPal records the note and moves the
+  dispute to `UNDER_REVIEW`. `ARGS=--list` lists the app's disputes.
 - Hosted persona run (D10): `make e2e-hosted` (needs `PERSONA_*_PASSWORD` and the console password in `.env`; see
   `.env.example`). Each order gets a fresh browser context, so no PayPal login carries over between buyers. Failure
   screenshots go to `backend/var/e2e/`.

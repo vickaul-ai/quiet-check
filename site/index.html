@@ -144,7 +144,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rul
     <div><b>9</b><span>private checks per order: 3 identifiers × 3 merchants</span></div>
     <div><b>14–18 s</b><span>buyer approval to final decision, hosted</span></div>
     <div><b>0</b><span>list entries that ever leave their owner</span></div>
-    <div><b>119</b><span>automated tests, plus live sandbox runs</span></div>
+    <div><b>134</b><span>automated tests, plus live sandbox runs</span></div>
   </div>
   <p class="muted" style="font-size:.84rem">Basis tags: <span class="tag t-meas">measured</span> we ran it and timed it · <span class="tag t-doc">documented</span> from a cited source · <span class="tag t-ours">our assessment</span> reasoned, not yet proven.</p>
 </header>
@@ -231,6 +231,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rul
       <p class="muted">Users: the merchant's risk agent runs every order automatically. A fraud reviewer works the console.</p>
       <ul>
         <li>A fraud signal drawn from other merchants' experience, before any money moves.</li>
+        <li>When a buyer disputes a payment, a drafted evidence note citing the signed receipts, ready to edit and send to PayPal.</li>
         <li>Three graded outcomes instead of pass/fail, so a single weak signal costs a review, not a lost sale.</li>
         <li>A signed receipt for every check, ready as evidence if the order is disputed.</li>
       </ul>
@@ -284,7 +285,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rul
     <article>
       <h3>Cost</h3>
       <p class="figure"><b>$4.61</b> is what each $1 of fraud costs a US retail or ecommerce merchant once chargebacks, fees, labour and replacement goods are counted <span class="tag t-doc">documented</span><sup>[10]</sup>.</p>
-      <p><strong>Quiet Check:</strong> a blocked order is never authorised, so no capture, refund or chargeback follows. Manual review is spent only on single-hit orders, and the receipts are ready-made dispute evidence <span class="tag t-ours">our assessment</span>.</p>
+      <p><strong>Quiet Check:</strong> a blocked order is never authorised, so no capture, refund or chargeback follows. Manual review is spent only on single-hit orders, and when a buyer disputes, the AI drafts evidence from the signed receipts for a person to send to PayPal. Whether that wins more disputes is <span class="tag t-ours">our assessment</span>, not yet measured.</p>
     </article>
     <article>
       <h3>Conversion</h3>
@@ -312,6 +313,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rul
       <tr><td>Webhooks</td><td><code>CHECKOUT.ORDER.APPROVED</code> starts the risk agent; signatures verified, events deduped</td></tr>
       <tr><td>Idempotency</td><td><code>PayPal-Request-Id</code> on every money-moving call, so retries can't double-charge</td></tr>
       <tr><td>Honour period</td><td>The console counts down PayPal's 3-day window for capturing a hold</td></tr>
+      <tr><td>Disputes v1</td><td>A buyer's dispute arrives by webhook; the AI drafts evidence from the signed receipts and decision log; a reviewer edits and submits it with provide-evidence</td></tr>
     </table></div>
   </div>
   <div class="stack">
@@ -336,6 +338,7 @@ footer { font-size: .84rem; color: var(--muted); border-top: 1px solid var(--rul
     <li><strong>Shopping agent</strong> (Claude Haiku 5.5, Vercel AI SDK): turns a sentence into a search, a cart and a PayPal order in one turn.</li>
     <li><strong>Risk rationale</strong> (Claude Haiku 5.5, LangChain): explains each decision in 2–3 sentences from the hit summary only, never from raw lists. If the model fails, a template stands in.</li>
     <li><strong>Review copilot</strong> (Claude Haiku 5.5): answers "why is this on hold?" and captures or voids, but only after the reviewer clicks Approve on a card showing the order, amount and action.</li>
+    <li><strong>Dispute evidence</strong> (Claude Sonnet 5.5): when a buyer disputes a payment, it drafts the merchant's evidence from the receipts, the decision and the PayPal timeline, without seeing the buyer's email, address or device. A person edits and submits it.</li>
     <li><strong>Guardrail:</strong> the backend recomputes the policy from the stored receipts and rejects any decision the policy didn't make. Models sit behind a swap layer; a swap to Sonnet was tested live <span class="tag t-meas">measured</span>.</li>
   </ul>
 </section>
