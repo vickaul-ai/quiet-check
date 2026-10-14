@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { buyerText, FINAL_STATUSES, type CheckoutResult } from "@/lib/types";
+import { behindTheScenes, buyerText, FINAL_STATUSES, type CheckoutResult } from "@/lib/types";
 
 // PayPal JS SDK v6, as in PayPal's one-time payment guide: createInstance with the public client
 // ID, then a one-time payment session started from the <paypal-button> click with the order ID.
@@ -124,8 +124,15 @@ export function PayPalCheckout({ order, clientId }: { order: CheckoutResult; cli
       </p>
       <div ref={container} className={done ? "hidden" : "min-h-11"} />
       {phase.kind === "loading" && <p className="text-[var(--muted)]">Loading PayPal…</p>}
-      {phase.kind === "cancelled" && <p className="mt-2 text-[var(--muted)]">Payment cancelled. You can try again.</p>}
-      {phase.kind === "error" && <p className="mt-2 text-[var(--bad)]">{phase.message}</p>}
+      {phase.kind === "ready" && (
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Approving opens PayPal. Before any money moves, the merchant privately checks you with 3 other merchants.
+        </p>
+      )}
+      {phase.kind === "cancelled" && (
+        <p className="mt-2 text-[var(--muted)]">Payment cancelled. Press the PayPal button to try again.</p>
+      )}
+      {phase.kind === "error" && <p className="mt-2 text-[var(--bad)]">{phase.message} Reload the page to try again.</p>}
       {done && <OrderStatus status={phase.status} />}
     </div>
   );
@@ -135,10 +142,25 @@ function OrderStatus({ status }: { status: string }) {
   const tone =
     status === "captured" ? "text-[var(--good)]" : status === "held" ? "text-[var(--warn)]" : "text-[var(--bad)]";
   const final = FINAL_STATUSES.includes(status);
+  const behind = behindTheScenes(status);
   return (
-    <p role="status" className={`text-base font-semibold ${final ? tone : "text-[var(--muted)]"}`}>
-      {buyerText(status)}
-      {!final && "…"}
-    </p>
+    <div className="flex flex-col gap-1.5">
+      <p role="status" className={`text-base font-semibold ${final ? tone : "text-[var(--muted)]"}`}>
+        {buyerText(status)}
+        {!final && "…"}
+      </p>
+      {!final && (
+        <p className="text-xs text-[var(--muted)]">
+          Checking your email, address and device privately with Members A, B and C (9 sessions). No list is shared.
+        </p>
+      )}
+      {behind && <p className="text-xs text-[var(--muted)]">{behind}</p>}
+      {final && (
+        // A full page load, so the browser asks for the console password (D9).
+        <a href="/console" className="text-xs font-medium text-[var(--accent)] underline underline-offset-4">
+          See what the merchant saw in the console →
+        </a>
+      )}
+    </div>
   );
 }

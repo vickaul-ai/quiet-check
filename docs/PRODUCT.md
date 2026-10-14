@@ -31,7 +31,7 @@ file tracks what exists today.
   the open order's AI rationale, a 3 x 3 member-by-field hit grid, its 9 receipts (verified, with the signed intents,
   result and member commitment) and the who-saw-what panel; a live feed of PayPal webhooks and our own events. The
   copilot explains a hold ("why is this on hold?") and, on the reviewer's instruction, captures or voids the held
-  payment after one Approve on a card showing the order, amount, action and note. Hosted, the console asks for a shared password (D9).
+  payment after one Approve on a card showing the order, amount, action and note. Hosted, the console asks for a shared password (D9). Presentation pass (2026-10-14): the shop explains the three steps and each persona's expected outcome and links each final status to the console; the console states the policy up front, names each order's buyer (from `device_id` in the orders list), hides orders never approved in PayPal, groups the members in who-saw-what, folds the receipts behind one disclosure and labels feed events in plain words.
 
 ## Roadmap
 

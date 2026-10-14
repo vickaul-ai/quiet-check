@@ -443,13 +443,14 @@ Actions only follow allowed status transitions; anything else is stored only.
       "authorization_id": "0VF52814937998046",
       "capture_id": null,
       "honor_period_ends_at": "2026-10-23T14:03:11Z",
+      "device_id": "dev-ben-2c9d",
       "created_at": "2026-10-20T14:01:02Z"
     }
   ]
 }
 ```
 
-`GET /merchant/orders/{order_id}` returns the list fields plus `items`, `device_id`, `payer_email`, `shipping_address`,
+`GET /merchant/orders/{order_id}` returns the list fields plus `items`, `payer_email`, `shipping_address`,
 `check` (the `/risk/check` response, or null until a check completes), `receipts` (full rows, in the same order as
 `check.hits`: `receipt_id`, `check_id`, `member`, `field`, `is_match`, `session_id`, `intent_directives`,
 `result_directive`, `member_commitment`, `member_public_key`, `verified`, `created_at`), `decision` (the full row or

@@ -14,7 +14,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Quiet Check demo shop",
-  description: "Shopping agent and PayPal checkout, with a private fraud check behind it",
+  description:
+    "An AI shopping agent and PayPal checkout, with a private fraud check against other merchants' lists before any money moves",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

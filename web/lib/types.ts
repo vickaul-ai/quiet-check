@@ -26,6 +26,18 @@ export function buyerText(status: string): string {
   return "Processing";
 }
 
+// Short outcome labels for the persona switcher and the console's buyer names (presentation only).
+export const PERSONA_OUTCOME: Record<string, string> = { captured: "clean", held: "hold", blocked: "block" };
+
+// What happened behind the buyer's status, in the merchant's terms (shown under the buyer text).
+export function behindTheScenes(status: string): string | null {
+  if (status === "captured") return "No merchant had this buyer on its list, so the payment was authorised and captured.";
+  if (status === "held") return "One merchant had a match, so the funds are authorised but not taken. A reviewer decides in the console.";
+  if (status === "blocked") return "Two or more matches, so the merchant never authorised the payment. No money moved.";
+  if (status === "voided") return "A reviewer voided the held payment, so the funds were released.";
+  return null;
+}
+
 // Merchant console (D6, contracts.md "Read endpoints"). Payer email and address never reach the browser.
 export type OrderRow = {
   order_id: string;
@@ -37,6 +49,7 @@ export type OrderRow = {
   authorization_id: string | null;
   capture_id: string | null;
   honor_period_ends_at: string | null;
+  device_id: string; // the demo device the storefront recorded (names the persona)
   created_at: string;
 };
 

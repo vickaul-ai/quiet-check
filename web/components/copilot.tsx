@@ -48,8 +48,10 @@ export function Copilot({ order, onResolved }: Props) {
       <div className="border-b border-[var(--line)] px-3 py-2">
         <h2 className="text-sm font-semibold">Review copilot</h2>
         <p className="text-xs text-[var(--muted)]">
-          On <code className="font-mono">{order.order_id}</code>. It captures or voids only on your instruction, after you
-          press Approve.
+          On <code className="font-mono">{order.order_id}</code>.{" "}
+          {order.status === "held"
+            ? "Ask it about the hold. It captures or voids only on your instruction, after you press Approve."
+            : "This order isn't held, so there is nothing to capture or void. Ask it to explain the decision."}
         </p>
       </div>
       <div className="flex max-h-[520px] flex-1 flex-col gap-3 overflow-y-auto p-3" aria-live="polite">
@@ -90,7 +92,7 @@ export function Copilot({ order, onResolved }: Props) {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-[var(--fg)] px-3 py-2 text-sm text-[var(--bg)] disabled:opacity-50"
+          className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-fg)] disabled:opacity-50"
         >
           Send
         </button>
@@ -128,7 +130,7 @@ function Message({ message, order, onRespond }: { message: UIMessage; order: Ord
             <p
               key={key}
               className={`max-w-[90%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                mine ? "bg-[var(--fg)] text-[var(--bg)]" : "bg-[var(--panel)]"
+                mine ? "bg-[var(--accent)] text-[var(--accent-fg)]" : "bg-[var(--panel)]"
               }`}
             >
               {part.text}
@@ -174,7 +176,7 @@ function ActionCard({ tool, order, onRespond }: { tool: ToolPart; order: OrderRo
         <div className="flex gap-2">
           <button
             onClick={() => onRespond({ id: approvalId, approved: true })}
-            className="rounded-md bg-[var(--fg)] px-3 py-1.5 text-[var(--bg)]"
+            className="rounded-md bg-[var(--accent)] px-3 py-1.5 font-medium text-[var(--accent-fg)]"
           >
             Approve {verb.toLowerCase()}
           </button>

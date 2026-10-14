@@ -349,6 +349,7 @@ def _summary(order, decision, hit_count) -> dict:
         "authorization_id": order.authorization_id,
         "capture_id": order.capture_id,
         "honor_period_ends_at": iso_z(order.honor_period_ends_at),
+        "device_id": order.device_id,  # the demo device; the console names the persona from it
         "created_at": iso_z(order.created_at),
     }
 

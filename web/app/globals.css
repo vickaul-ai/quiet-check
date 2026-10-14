@@ -9,6 +9,9 @@
   --good: #15803d;
   --warn: #b45309;
   --bad: #b91c1c;
+  --accent: #1f5f8b; /* Quiet Check ledger blue: primary actions and the wordmark */
+  --accent-fg: #ffffff;
+  --accent-soft: #e6eff6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,6 +24,9 @@
     --good: #4ade80;
     --warn: #fbbf24;
     --bad: #f87171;
+    --accent: #7db6e0;
+    --accent-fg: #0a0a0a;
+    --accent-soft: #15222c;
   }
 }
 

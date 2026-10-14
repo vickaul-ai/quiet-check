@@ -308,6 +308,7 @@ def test_read_endpoints(merchant) -> None:
         "authorization_id",
         "capture_id",
         "honor_period_ends_at",
+        "device_id",
         "created_at",
     }
     assert (listed[0]["decision"], listed[0]["hit_count"]) == ("hold", 1)

@@ -20,7 +20,13 @@ async function Shop() {
   if (!catalog) {
     return (
       <p className="p-8 text-sm">
-        The shop backend isn&apos;t reachable. Start it with <code>make dev</code> (or set <code>BACKEND_URL</code>).
+        {process.env.RENDER ? (
+          <>The demo&apos;s backend isn&apos;t answering right now. Refresh in about 30 seconds.</>
+        ) : (
+          <>
+            The shop backend isn&apos;t reachable. Start it with <code>make dev</code> (or set <code>BACKEND_URL</code>).
+          </>
+        )}
       </p>
     );
   }
