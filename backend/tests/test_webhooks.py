@@ -6,8 +6,8 @@ from sqlalchemy import select
 
 from app.db import events, orders
 from tests.fake_paypal import webhook_event, webhook_headers
-from tests.standins import mark_held, record_decision, start_checking
-from tests.test_payments import ADDRESS, authorize, create, rows
+from tests.stored_checks import store_check
+from tests.test_payments import ADDRESS, authorize, create, processed_order, rows
 
 
 def send(api, event: dict, signature: str = "good", raw: bytes | None = None):
@@ -85,13 +85,31 @@ def test_missing_headers_and_bad_bodies(api, fake) -> None:
 
 
 def held_order(api, fake) -> tuple[dict, str]:
+    order = processed_order(api, fake, "hold")
+    return order, authorize(api, order["order_id"])["authorization_id"]
+
+
+def test_approved_webhook_runs_the_risk_agent(api, fake, model) -> None:
+    """CHECKOUT.ORDER.APPROVED alone takes the order to a decision (after the 200)."""
     order = create(api)
     fake.approve(order["paypal_order_id"], "ben@example.com", ADDRESS)
-    start_checking(api.app.state.engine, order["order_id"])
-    record_decision(api.app.state.engine, order["order_id"], "hold")
-    auth_id = authorize(api, order["order_id"])["authorization_id"]
-    mark_held(api.app.state.engine, order["order_id"])
-    return order, auth_id
+    store_check(api.app.state.engine, order["order_id"], "hold")
+    event = webhook_event("CHECKOUT.ORDER.APPROVED", {"id": order["paypal_order_id"]})
+    assert send(api, event).status_code == 200
+    row = order_row(api, order["order_id"])
+    assert row.status == "held" and row.authorization_id
+    assert len(model.calls) == 1
+    assert send(api, event).status_code == 200  # a duplicate doesn't run it again
+    assert len(model.calls) == 1
+    assert len(fake.calls("POST", "/authorize")) == 1
+
+
+def test_approved_webhook_for_an_unapproved_paypal_order_leaves_it_approved(api, fake) -> None:
+    order = create(api)  # PayPal still says CREATED
+    event = webhook_event("CHECKOUT.ORDER.APPROVED", {"id": order["paypal_order_id"]})
+    assert send(api, event).status_code == 200
+    assert order_row(api, order["order_id"]).status == "approved"
+    assert fake.calls("POST", "/authorize") == []
 
 
 def test_authorization_created_fills_missing_fields_only(api, fake) -> None:

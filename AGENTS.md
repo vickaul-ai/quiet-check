@@ -17,5 +17,6 @@ holds or declines the payment through PayPal Orders v2 (sandbox only).
   `backend/app/db.py` (ADR 0005). Integration tests start real members; `uv run pytest -m slow -s` times a demo-size check.
 - PayPal (sandbox): REST client in `backend/app/paypal.py`, no Agent Toolkit (it has no authorise/void). CI uses a fake
   PayPal; live runs (`make approve-orders`, `make test-live`, `make gate-a`) need a human to approve orders once and
-  `ngrok http 8000` (ADR 0007). Payment endpoints enforce status guards; D4 owns status changes.
+  `ngrok http 8000` (ADR 0007). Payment endpoints enforce status guards; the risk agent (`app/merchant.py`, ADR 0008)
+  owns status changes. Demo lists: `make seed`; persona emails live only in `.env`.
 - Docs: `docs/PRODUCT.md`, `docs/ENGINEERING.md`, ADRs in `docs/decisions/`.

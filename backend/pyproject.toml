@@ -8,6 +8,8 @@ dependencies = [
     "ap3[a2a]==1.2.2",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
+    "langchain>=1.4,<2",
+    "langchain-anthropic>=1.7,<2",
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.2.4",
     "python-ulid>=3.0",

@@ -30,13 +30,13 @@ Any session that changes an interface updates this file in the same change and n
 | `held` | Hold: authorised only, waiting for a reviewer |
 | `blocked` | Block: never authorised; the PayPal order is left to expire |
 | `voided` | A reviewer voided the held authorisation |
-| `failed` | The check or a PayPal call failed; no decision recorded. Re-run with `POST /merchant/process` |
+| `failed` | The check or a PayPal call failed. Re-run with `POST /merchant/process`. If the check failed there is no decision; if a PayPal call failed after the decision, the decision is kept and the rerun resumes its PayPal action (D4) |
 
 Allowed transitions: `created -> approved`; `created | approved | failed -> checking` (the storefront's `onApprove` can
 arrive before the webhook); `checking -> captured | held | blocked | failed`; `held -> captured | voided`.
 
 Buyer-facing text (D5): `captured` "Paid"; `held` "Payment on hold for review"; `blocked` and `voided` "We couldn't
-complete this order"; anything else "Processing".
+complete this order"; anything else "Processing". The storefront polls `GET /merchant/orders/{order_id}/status` for it.
 
 ## HTTP endpoints
 
@@ -277,6 +277,26 @@ Response `200` (decision made, or already made):
 
 Response `202`, if a run for this order is already in progress: `{"order_id": "ord_01JA...", "status": "checking"}`.
 
+Details (D4):
+
+- An order already `captured`, `held`, `blocked` or `voided` returns the stored result (`200`) without calling PayPal,
+  rerunning PSI or calling the model. A `checking` order returns `202`.
+- Before claiming the order, the backend reads the PayPal order. If PayPal's status isn't `APPROVED` (or `COMPLETED`,
+  when an earlier run already authorised), the call returns `409 invalid_state` with `details.paypal_status` and the
+  order is unchanged.
+- A failed check (`502 member_unavailable`, or `409 invalid_state` with `details.missing`) or a failed PayPal call
+  (`502 paypal_error`) sets the order to `failed` and returns that error. A rerun reuses the stored check if it
+  completed and the stored decision and rationale if one was made (no new model call), then resumes the PayPal action.
+- The rationale call has a 10 s timeout. On any model error, timeout or empty reply, the decision still goes ahead with
+  a template rationale built from the same hit summary, e.g. "Automatic explanation unavailable. Policy decision: hold.
+  1 hit: Member B, email. Address and device were clear at all members." The `decision.made` event then has
+  `rationale_source: "template"` (otherwise `"llm"`).
+- The model sees only the hit summary: decision, PayPal action, hit count, which member matched which field, and which
+  fields were clear everywhere. Never identifiers, hashes, list contents or other buyers' data. Prompt:
+  `prompts/risk_rationale.md`.
+- The webhook trigger runs after the webhook's `200` (in the background) and only when the event moved the order from
+  `created` to `approved`. Its errors are logged and leave the order `failed` for a rerun.
+
 ### `POST /merchant/decide`: record and execute a decision
 
 Internal: only the risk agent calls it. The backend recomputes the policy from the stored check. If `decision` differs from
@@ -291,9 +311,12 @@ Request:
   "order_id": "ord_01JA...",
   "decision": "hold",
   "rationale": "The payer's email matched one consortium member's abuse list; address and device were clear everywhere. One signal isn't enough to decline, so funds are held for review.",
-  "check_id": "chk_01JA..."
+  "check_id": "chk_01JA...",
+  "rationale_source": "llm"
 }
 ```
+
+`rationale_source` is optional (`"llm"` or `"template"`, default `"llm"`) and goes into the `decision.made` event.
 
 Response `200`:
 
@@ -310,6 +333,15 @@ Response `200`:
 ```
 
 `paypal_action` is `"authorize_capture"` (clean), `"authorize"` (hold) or `"none"` (block).
+
+Details (D4): `409 policy_mismatch` has `details.decision` and `details.policy_decision`, and writes nothing. An unknown
+order, or a `check_id` that isn't this order's check, is `404 not_found`; a check that isn't `completed` is
+`409 invalid_state` (`details.check_status`). A new decision needs the order in `checking` (`409 invalid_state`
+otherwise). The decision row and its `decision.made` event (payload `decision_id`, `decision`, `check_id`, `hit_count`,
+`paypal_action`, `rationale_source`) are written before the PayPal action, because the payment guards need the stored
+decision. If the PayPal action fails, the order becomes `failed` and the decision stays; a repeat call with the same
+decision resumes the action (authorise and capture return their stored results if they already happened). Otherwise
+a repeat call returns the stored result.
 
 ### `POST /webhooks/paypal`: PayPal webhook receiver
 
@@ -331,7 +363,7 @@ Actions only follow allowed status transitions; anything else is stored only.
 
 ### Read endpoints (console and storefront)
 
-`GET /merchant/orders` returns the newest orders first:
+`GET /merchant/orders` returns the newest 100 orders first (`decision` and `hit_count` are null until set):
 
 ```json
 {
@@ -353,8 +385,12 @@ Actions only follow allowed status transitions; anything else is stored only.
 ```
 
 `GET /merchant/orders/{order_id}` returns the list fields plus `items`, `device_id`, `payer_email`, `shipping_address`,
-`check` (the `/risk/check` response), `receipts` (full rows, including the signed intent and result directives),
-`decision` (the full row, including the rationale) and `who_saw_what`:
+`check` (the `/risk/check` response, or null until a check completes), `receipts` (full rows, in the same order as
+`check.hits`: `receipt_id`, `check_id`, `member`, `field`, `is_match`, `session_id`, `intent_directives`,
+`result_directive`, `member_commitment`, `member_public_key`, `verified`, `created_at`), `decision` (the full row or
+null: `decision_id`, `check_id`, `decision`, `rationale`, `rationale_source` (from the `decision.made` event),
+`paypal_action`, `resolution`, `resolution_note`, `resolved_at`, `created_at`; it replaces the list's `decision`
+string) and `who_saw_what`:
 
 ```json
 {
@@ -368,14 +404,20 @@ Actions only follow allowed status transitions; anything else is stored only.
 }
 ```
 
-`GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first.
-The console polls it for the live feed.
+`GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first
+(from the very first event without `after`). Each has `event_id`, `source`, `event_type`, `order_id`, `paypal_event_id`,
+`resource_id`, `verified`, `payload` and `created_at`. The console polls it for the live feed.
+
+`GET /merchant/orders/{order_id}/status` returns `{"order_id": "ord_01JA...", "status": "held"}` and nothing else (D4,
+decided with Vic). The storefront polls this after a `202 checking`; it carries no payer details, receipts or
+rationale, so D9 can leave it public while the other read endpoints (which carry payer email, address and receipts)
+go behind auth. Unknown order: `404 not_found`.
 
 ## Webhook events handled
 
 | Event | Action |
 | --- | --- |
-| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` (the trigger arrives with D4) |
+| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` after the `200` (D4) |
 | `PAYMENT.AUTHORIZATION.CREATED` | Record `authorization_id`, `expires_at` and `honor_period_ends_at` if missing. No status change |
 | `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set a `held` order to `voided` |
 | `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` if missing and set a `checking` or `held` order to `captured` |
@@ -444,7 +486,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | `order_id` | text unique FK -> orders | One decision per order |
 | `check_id` | text FK -> checks | |
 | `decision` | text | `clean`, `hold`, `block` |
-| `rationale` | text | AI-written, 2-3 sentences |
+| `rationale` | text | AI-written, 2-3 sentences; a template from the hit summary if the model failed (the `decision.made` event's `rationale_source` says which) |
 | `paypal_action` | text | `authorize_capture`, `authorize`, `none` |
 | `resolution` | text null | Reviewer action on holds: `capture`, `void` |
 | `resolution_note` | text null | |
@@ -456,7 +498,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text PK | `evt_...` (ULIDs sort by time) |
-| `source` | text | `paypal_webhook` or `system` (our own actions: `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`; D4 adds `decision.made`) |
+| `source` | text | `paypal_webhook` or `system` (our own actions: `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`, `decision.made`) |
 | `paypal_event_id` | text unique null | Deduplicates webhook deliveries |
 | `event_type` | text | e.g. `PAYMENT.CAPTURE.COMPLETED`, `decision.made` |
 | `order_id` | text null FK -> orders | |
@@ -492,6 +534,13 @@ before the member fetches any URL, and the backend reports `502 member_unavailab
 
 Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
 
+**Demo personas and lists** (D7): `backend/app/personas.json` holds each persona's `key`, `name`, `device_id`
+(`dev-ana-7f3a`, `dev-ben-2c9d`, `dev-cy-5e1b`; synthetic), `email_env` (the `.env` variable with its sandbox buyer
+email), `seeded_on` (`{member: [fields]}`) and expected `decision` and `status`. D5's persona switcher sends the
+`device_id`. `scripts/seed.py` (`make seed`) writes 300 entries per member: synthetic identifiers from a fixed
+per-member random seed (made-up names, `example.*` emails, made-up towns) plus the persona seeds (Ben's email on B;
+Cy's email and device ID on A and C). The same emails always give byte-identical files, so it is idempotent.
+
 D10 unit-tests these rules. List entries, normalised values and hashes never appear in logs (a CI grep enforces this).
 
 ## Environment variables
@@ -506,8 +555,8 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `LLM_MODEL_FAST` | Shopping agent, rationale, copilot | `claude-haiku-5-5` |
 | `LLM_MODEL_SMART` | Dispute drafts (D8) | `claude-sonnet-5-5` |
 | `DATABASE_URL` | Backend | `sqlite:///./quietcheck.db` locally; Render Postgres URL when hosted |
-
-| `MEMBER_DATA_DIR` | Members | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
+| `MEMBER_DATA_DIR` | Members; `scripts/seed.py` | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
+| `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py` | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
 
 Later deliverables that add a variable (for example, member URLs for Render in D9) list it here and in `.env.example`.
 

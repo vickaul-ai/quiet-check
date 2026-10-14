@@ -171,10 +171,38 @@ CASES = [
 ]
 
 
+# The demo personas as the tests play them: personas.json device IDs, made-up sandbox emails and
+# addresses (the real ones come from .env and the sandbox accounts).
+PERSONA_EMAILS = {
+    "ana": "ana.persona@example.com",
+    "ben": "ben.persona@example.com",
+    "cy": "cy.persona@example.com",
+}
+PERSONA_ADDRESSES = {
+    "ana": address("10 Persona Way"),
+    "ben": address("20 Persona Way"),
+    "cy": address("30 Persona Way"),
+}
+
+
+def persona_identifiers() -> list[dict]:
+    from app.personas import load_personas
+
+    return [
+        {
+            "email": PERSONA_EMAILS[p["key"]],
+            "shipping_address": PERSONA_ADDRESSES[p["key"]],
+            "device_id": p["device_id"],
+        }
+        for p in load_personas()
+    ]
+
+
 def sensitive_values() -> list[str]:
     """Everything that must never reach a log: raw-ish, normalised and hashed identifiers."""
     out: set[str] = set()
-    for _name, ids, _hits in CASES:
+    identifier_sets = [ids for _name, ids, _hits in CASES] + persona_identifiers()
+    for ids in identifier_sets:
         for field, value in ids.items():
             out.add(normalise(field, value))
             out.add(identifier_hash(field, value))

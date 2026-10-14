@@ -9,13 +9,14 @@ ID or store arbitrary content. Bodies over 256 KB are refused before they are bu
 import json
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy import Connection, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import events, orders
 from app.errors import APIError
 from app.ids import new_id
+from app.merchant import process_in_background
 from app.payments import HONOR_PERIOD, get_paypal, parse_time
 from app.paypal import PayPalError
 
@@ -62,15 +63,17 @@ def find_order_id(conn: Connection, event_type: str, resource: dict) -> str | No
     return row.id if row else None
 
 
-def apply_event(conn: Connection, event_type: str, order_id: str, resource: dict) -> None:
-    """The contract's actions. Each one only moves an order along an allowed transition."""
+def apply_event(conn: Connection, event_type: str, order_id: str, resource: dict) -> bool:
+    """The contract's actions. Each one only moves an order along an allowed transition.
+    Returns True when the risk agent should run (the order just moved to `approved`)."""
     order = orders.c
     if event_type == "CHECKOUT.ORDER.APPROVED":
-        # D4 adds the /merchant/process trigger here.
-        conn.execute(
-            update(orders)
-            .where(order.id == order_id, order.status == "created")
-            .values(status="approved")
+        return bool(
+            conn.execute(
+                update(orders)
+                .where(order.id == order_id, order.status == "created")
+                .values(status="approved")
+            ).rowcount
         )
     elif event_type == "PAYMENT.AUTHORIZATION.CREATED":
         created = parse_time(resource.get("create_time"))
@@ -101,10 +104,11 @@ def apply_event(conn: Connection, event_type: str, order_id: str, resource: dict
             .values(status="captured")
         )
     # CUSTOMER.DISPUTE.CREATED and anything else: store only.
+    return False
 
 
 @router.post("/paypal")
-async def paypal_webhook(request: Request) -> dict:
+async def paypal_webhook(request: Request, background: BackgroundTasks) -> dict:
     engine = request.app.state.engine
     settings = request.app.state.settings
     raw = await read_capped_body(request)
@@ -127,6 +131,7 @@ async def paypal_webhook(request: Request) -> dict:
             502, "paypal_error", f"Webhook verification failed: {exc.name}.", exc.details
         ) from None
 
+    run_process = False
     with engine.begin() as conn:
         order_id = find_order_id(conn, event_type, resource) if verified else None
         row = {
@@ -149,10 +154,13 @@ async def paypal_webhook(request: Request) -> dict:
                 logger.info("webhook %s %s is a duplicate", event_type, event["id"])
                 return {"received": True}
             if order_id:
-                apply_event(conn, event_type, order_id, resource)
+                run_process = apply_event(conn, event_type, order_id, resource)
 
     if not verified:
         logger.warning("webhook %s failed verification", event_type)
         raise APIError(400, "webhook_unverified", "Webhook signature verification failed.")
     logger.info("webhook %s %s for order %s", event_type, event["id"], order_id)
+    if run_process and settings.process_on_approval:
+        # After commit and after the 200: the check takes ~3 s plus the model call.
+        background.add_task(process_in_background, request.app.state, order_id)
     return {"received": True}

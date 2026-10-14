@@ -1,0 +1,29 @@
+[
+  {
+    "key": "ana",
+    "name": "Ana",
+    "device_id": "dev-ana-7f3a",
+    "email_env": "PERSONA_ANA_EMAIL",
+    "seeded_on": {},
+    "decision": "clean",
+    "status": "captured"
+  },
+  {
+    "key": "ben",
+    "name": "Ben",
+    "device_id": "dev-ben-2c9d",
+    "email_env": "PERSONA_BEN_EMAIL",
+    "seeded_on": {"B": ["email"]},
+    "decision": "hold",
+    "status": "held"
+  },
+  {
+    "key": "cy",
+    "name": "Cy",
+    "device_id": "dev-cy-5e1b",
+    "email_env": "PERSONA_CY_EMAIL",
+    "seeded_on": {"A": ["email", "device_id"], "C": ["email", "device_id"]},
+    "decision": "block",
+    "status": "blocked"
+  }
+]

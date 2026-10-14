@@ -1,7 +1,7 @@
 """Quiet Check backend.
 
-D2 added /risk and the in-process AP3 initiator; D3 adds /catalog, /payments and /webhooks;
-/merchant arrives in D4. See docs/contracts.md.
+D2 added /risk and the in-process AP3 initiator; D3 /catalog, /payments and /webhooks; D4 the
+/merchant risk agent and read endpoints. See docs/contracts.md.
 """
 
 from contextlib import asynccontextmanager
@@ -13,6 +13,7 @@ from app.config import Settings
 from app.consortium.initiator import Initiator
 from app.db import make_engine
 from app.errors import install_error_handlers
+from app.merchant import router as merchant_router
 from app.payments import router as payments_router
 from app.paypal import PayPalClient
 from app.risk import router as risk_router
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(catalog_router)
     app.include_router(risk_router)
     app.include_router(payments_router)
+    app.include_router(merchant_router)
     app.include_router(webhooks_router)
 
     @app.get("/health")

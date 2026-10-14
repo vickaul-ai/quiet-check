@@ -1,7 +1,7 @@
-"""Shared pieces for the live sandbox runs: `scripts/approve_orders.py`, `pytest -m live` and
-`scripts/gate_a.py`.
+"""Shared pieces for the live sandbox runs: `scripts/approve_orders.py`, `pytest -m live`,
+`scripts/gate_a.py` and `scripts/live_personas.py`.
 
-All three serve the backend on :8000 (QC_LIVE_PORT) so PayPal's webhooks reach it through
+All of them serve the backend on :8000 (QC_LIVE_PORT) so PayPal's webhooks reach it through
 `ngrok http 8000`, and share one SQLite DB plus the saved approved orders in
 `backend/var/live/` (git-ignored). Each saved order can be authorised once, so it is removed
 from the file when a run takes it. One third-party guide says unapproved orders expire after
@@ -22,9 +22,10 @@ import httpx
 import uvicorn
 from sqlalchemy import Engine, select
 
-from app.config import VAR_DIR, Settings
-from app.db import events
+from app.config import MEMBERS, VAR_DIR, Settings, member_data_dir
+from app.db import events, orders
 from app.main import create_app
+from tests.harness import MemberProcess, free_port, write_lists
 
 LIVE_DIR = VAR_DIR / "live"
 LIVE_DB = LIVE_DIR / "live.db"
@@ -126,3 +127,44 @@ def wait_for_webhooks(
         if set(seen) == event_types or time.monotonic() > deadline:
             return seen
         time.sleep(2)
+
+
+@contextmanager
+def consortium(data_dir: Path | None, log_dir: Path, seeded=None, filler: int = 300) -> Iterator:
+    """Members A-C on spare ports, answering one fresh initiator port. With `seeded`, writes
+    synthetic lists (filler + seeds) to `data_dir` first; with `seeded=None` the members read
+    the lists already in `data_dir` (or MEMBER_DATA_DIR). Yields the backend settings
+    overrides that point the initiator at them."""
+    if seeded is not None:
+        write_lists(data_dir, seeded, filler_per_member=filler)
+    initiator_port = free_port()
+    initiator_url = f"http://127.0.0.1:{initiator_port}"
+    data_dir = data_dir or member_data_dir()
+    members = {
+        m: MemberProcess(m, free_port(), data_dir, log_dir, [initiator_url]) for m in MEMBERS
+    }
+    try:
+        for proc in members.values():
+            proc.wait_ready()
+        yield {
+            "start_initiator": True,
+            "initiator_port": initiator_port,
+            "initiator_key_path": LIVE_DIR / "initiator" / "key.json",
+            "member_urls": {m: p.url for m, p in members.items()},
+        }
+    finally:
+        for proc in members.values():
+            proc.stop()
+
+
+def wait_for_status(
+    engine: Engine, order_id: str, statuses: set[str], timeout_s: float = WEBHOOK_TIMEOUT_S
+) -> str:
+    """Wait until the order reaches one of `statuses`; returns its last status."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        with engine.connect() as conn:
+            status = conn.execute(select(orders.c.status).where(orders.c.id == order_id)).scalar()
+        if status in statuses or time.monotonic() > deadline:
+            return status
+        time.sleep(1)

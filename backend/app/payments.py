@@ -280,8 +280,11 @@ def authorize_response(conn: Connection, order) -> dict:
 
 @router.post("/orders/{order_id}/authorize")
 async def authorize(order_id: str, request: Request, body: EmptyRequest | None = None) -> dict:
-    engine: Engine = request.app.state.engine
-    paypal = get_paypal(request)
+    return await authorize_order(request.app.state.engine, get_paypal(request), order_id)
+
+
+async def authorize_order(engine: Engine, paypal: PayPalClient, order_id: str) -> dict:
+    """The authorise action (also called by /merchant/decide). Raises APIError."""
     with engine.connect() as conn:
         order = load_order(conn, order_id)
         if order.authorization_id:
@@ -380,13 +383,21 @@ def resolve_decision(conn: Connection, order_id: str, resolution: str, note: str
 
 @router.post("/authorizations/{authorization_id}/capture", status_code=201)
 async def capture(authorization_id: str, body: CaptureRequest, request: Request) -> dict:
-    engine: Engine = request.app.state.engine
+    return await capture_authorization(
+        request.app.state.engine, get_paypal(request), authorization_id, body.actor, body.note
+    )
+
+
+async def capture_authorization(
+    engine: Engine, paypal: PayPalClient, authorization_id: str, actor: str, note: str | None
+) -> dict:
+    """The capture action (also called by /merchant/decide for clean). Raises APIError."""
     with engine.connect() as conn:
         order = order_by_authorization(conn, authorization_id)
         if order.capture_id:
             return capture_response(conn, order)
         decision = stored_decision(conn, order.id)
-    if body.actor == "policy":
+    if actor == "policy":
         allowed = order.status == "checking" and decision is not None
         allowed = allowed and decision.decision == "clean"
         need = "checking with a clean decision"
@@ -396,8 +407,8 @@ async def capture(authorization_id: str, body: CaptureRequest, request: Request)
         raise APIError(
             409,
             "invalid_state",
-            f"Order {order.id} is {order.status}; a {body.actor} capture needs {need}.",
-            {"status": order.status, "actor": body.actor},
+            f"Order {order.id} is {order.status}; a {actor} capture needs {need}.",
+            {"status": order.status, "actor": actor},
         )
 
     with engine.begin() as conn:
@@ -405,11 +416,11 @@ async def capture(authorization_id: str, body: CaptureRequest, request: Request)
             conn,
             "capture.requested",
             order.id,
-            {"authorization_id": authorization_id, "actor": body.actor, "note": body.note},
+            {"authorization_id": authorization_id, "actor": actor, "note": note},
             resource_id=authorization_id,
         )
     try:
-        result = await get_paypal(request).capture_authorization(
+        result = await paypal.capture_authorization(
             authorization_id, request_id=f"{order.id}:capture"
         )
     except PayPalError as exc:
@@ -428,8 +439,8 @@ async def capture(authorization_id: str, body: CaptureRequest, request: Request)
             .where(orders.c.id == order.id, orders.c.status.in_(("checking", "held")))
             .values(status="captured")
         )
-        if body.actor == "reviewer":
-            resolve_decision(conn, order.id, "capture", body.note)
+        if actor == "reviewer":
+            resolve_decision(conn, order.id, "capture", note)
         add_event(
             conn,
             "payment.captured",
@@ -439,13 +450,13 @@ async def capture(authorization_id: str, body: CaptureRequest, request: Request)
                 "capture_id": result["id"],
                 "capture_status": result.get("status"),
                 "amount": amount,
-                "actor": body.actor,
-                "note": body.note,
+                "actor": actor,
+                "note": note,
             },
             resource_id=result["id"],
         )
         order = load_order(conn, order.id)
-        logger.info("order %s captured (%s) by %s", order.id, result.get("status"), body.actor)
+        logger.info("order %s captured (%s) by %s", order.id, result.get("status"), actor)
         return capture_response(conn, order)
 
 
@@ -463,17 +474,25 @@ def void_response(order) -> dict:
 
 @router.post("/authorizations/{authorization_id}/void")
 async def void(authorization_id: str, body: VoidRequest, request: Request) -> dict:
-    engine: Engine = request.app.state.engine
+    return await void_authorization(
+        request.app.state.engine, get_paypal(request), authorization_id, body.actor, body.note
+    )
+
+
+async def void_authorization(
+    engine: Engine, paypal: PayPalClient, authorization_id: str, actor: str, note: str | None
+) -> dict:
+    """The void action (reviewer only). Raises APIError."""
     with engine.connect() as conn:
         order = order_by_authorization(conn, authorization_id)
     if order.status == "voided":
         return void_response(order)
-    if order.status != "held" or body.actor != "reviewer":
+    if order.status != "held" or actor != "reviewer":
         raise APIError(
             409,
             "invalid_state",
             f"Order {order.id} is {order.status}; void needs held and a reviewer.",
-            {"status": order.status, "actor": body.actor},
+            {"status": order.status, "actor": actor},
         )
 
     with engine.begin() as conn:
@@ -481,13 +500,11 @@ async def void(authorization_id: str, body: VoidRequest, request: Request) -> di
             conn,
             "void.requested",
             order.id,
-            {"authorization_id": authorization_id, "actor": body.actor, "note": body.note},
+            {"authorization_id": authorization_id, "actor": actor, "note": note},
             resource_id=authorization_id,
         )
     try:
-        await get_paypal(request).void_authorization(
-            authorization_id, request_id=f"{order.id}:void"
-        )
+        await paypal.void_authorization(authorization_id, request_id=f"{order.id}:void")
     except PayPalError as exc:
         raise paypal_error(engine, order.id, "void", exc) from None
 
@@ -497,12 +514,12 @@ async def void(authorization_id: str, body: VoidRequest, request: Request) -> di
             .where(orders.c.id == order.id, orders.c.status == "held")
             .values(status="voided")
         )
-        resolve_decision(conn, order.id, "void", body.note)
+        resolve_decision(conn, order.id, "void", note)
         add_event(
             conn,
             "payment.voided",
             order.id,
-            {"authorization_id": authorization_id, "actor": body.actor, "note": body.note},
+            {"authorization_id": authorization_id, "actor": actor, "note": note},
             resource_id=authorization_id,
         )
         order = load_order(conn, order.id)

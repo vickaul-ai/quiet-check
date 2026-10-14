@@ -38,6 +38,15 @@ class Settings:
     paypal_client_secret: str = field(default="", repr=False)
     paypal_webhook_id: str = ""
     paypal_transport: Any = None
+    # Risk rationale model (contracts.md, "Environment variables"). Tests pass `rationale_model`,
+    # a LangChain chat model (or anything with `ainvoke`), instead of building one.
+    llm_provider: str = "anthropic"
+    llm_model_fast: str = "claude-haiku-5-5"
+    rationale_timeout_s: float = 10.0
+    rationale_model: Any = None
+    # Run /merchant/process when a CHECKOUT.ORDER.APPROVED webhook moves an order to approved.
+    # Off only for scripts/approve_orders.py, which saves approved orders for later live runs.
+    process_on_approval: bool = True
 
     @classmethod
     def from_env(cls, **overrides) -> "Settings":
@@ -46,6 +55,8 @@ class Settings:
             "paypal_client_id": os.environ.get("PAYPAL_CLIENT_ID", ""),
             "paypal_client_secret": os.environ.get("PAYPAL_CLIENT_SECRET", ""),
             "paypal_webhook_id": os.environ.get("PAYPAL_WEBHOOK_ID", ""),
+            "llm_provider": os.environ.get("LLM_PROVIDER") or cls.llm_provider,
+            "llm_model_fast": os.environ.get("LLM_MODEL_FAST") or cls.llm_model_fast,
         }
         return cls(**(values | overrides))
 

@@ -184,24 +184,46 @@ def _complete_check(engine: Engine, check_id: str, order_id: str, results) -> No
 
 @router.post("/check")
 async def risk_check(body: CheckRequest, request: Request) -> dict:
-    engine: Engine = request.app.state.engine
-    initiator: Initiator | None = request.app.state.initiator
+    return await run_risk_check(
+        request.app.state.engine,
+        request.app.state.initiator,
+        body.order_id,
+        timeout_s=request.app.state.settings.check_timeout_s,
+    )
+
+
+def stored_check(engine: Engine, order_id: str) -> dict | None:
+    """The order's completed check as the /risk/check response, or None."""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(checks).where(checks.c.order_id == order_id, checks.c.status == "completed")
+        ).first()
+    return check_response(engine, row) if row else None
+
+
+async def run_risk_check(
+    engine: Engine, initiator: Initiator | None, order_id: str, timeout_s: float
+) -> dict:
+    """The /risk/check action (also called by /merchant/process). Raises APIError.
+
+    A completed check is returned as stored, even without a running initiator."""
+    stored = stored_check(engine, order_id)
+    if stored is not None:
+        return stored
     if initiator is None:
         raise APIError(502, "member_unavailable", "The AP3 initiator is not running.")
 
-    check_row, identifiers = _claim_check(engine, body.order_id)
+    check_row, identifiers = _claim_check(engine, order_id)
     if identifiers is None:
         return check_response(engine, check_row)
 
     hashes = {field: identifier_hash(field, identifiers[field]) for field in FIELDS}
     started = time.perf_counter()
     try:
-        results = await initiator.run_check(
-            hashes, timeout_s=request.app.state.settings.check_timeout_s
-        )
+        results = await initiator.run_check(hashes, timeout_s=timeout_s)
     except ConsortiumError as exc:
         members = sorted({m for m, _f, _e in exc.failures})
-        _fail_check(engine, check_row.id, body.order_id, "member_unavailable", members)
+        _fail_check(engine, check_row.id, order_id, "member_unavailable", members)
         raise APIError(
             502,
             "member_unavailable",
@@ -210,13 +232,13 @@ async def risk_check(body: CheckRequest, request: Request) -> dict:
         ) from None
     except BaseException:
         # Includes cancellation: leave the check `failed` so it can be rerun, never `running`.
-        _fail_check(engine, check_row.id, body.order_id, "internal_error")
+        _fail_check(engine, check_row.id, order_id, "internal_error")
         raise
-    _complete_check(engine, check_row.id, body.order_id, results)
+    _complete_check(engine, check_row.id, order_id, results)
     logger.info(
         "check %s for %s: %d sessions in %.2fs, hit_count=%d",
         check_row.id,
-        body.order_id,
+        order_id,
         len(results),
         time.perf_counter() - started,
         sum(r.is_match for r in results),

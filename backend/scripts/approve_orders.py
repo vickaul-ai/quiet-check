@@ -6,7 +6,9 @@ Needs: `make dev-backend` stopped (this serves the backend on :8000 itself, so t
 CHECKOUT.ORDER.APPROVED webhook lands in the live DB) and `ngrok http 8000` running with the
 sandbox webhook pointing at it. Approve each link as a sandbox buyer (www.sandbox.paypal.com).
 Saved orders go to backend/var/live/approved_orders.json; `pytest -m live` uses two (one ends
-in capture, one in void) and `scripts/gate_a.py` uses one. Use them soon after approval.
+in capture, one in void) and `scripts/gate_a.py` uses one. Use them soon after approval. The
+server here runs with `process_on_approval=False`, so the APPROVED webhook leaves each order
+`approved` for those runs instead of starting the risk agent.
 """
 
 import argparse
@@ -93,7 +95,7 @@ def main() -> int:
     tunnel = live.ngrok_url()
     missing = f"NO TUNNEL to :{live.PORT} found; webhooks will not arrive"
     print(f"ngrok: {tunnel or missing}")
-    settings = live.live_settings()
+    settings = live.live_settings(process_on_approval=False)
     with live.serve(settings) as app:
         return asyncio.run(run(args.count, settings, app))
 

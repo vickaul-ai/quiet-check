@@ -13,7 +13,15 @@ file tracks what exists today.
 - **PayPal payments (D3):** `GET /catalog` (7 SKUs), `POST /payments/orders` (backend-priced, intent `AUTHORIZE`),
   authorise, capture and void with status guards (money moves only from a clean decision or a reviewer on a held order),
   and `POST /webhooks/paypal` with signature verification and dedupe. Sandbox only.
-- No risk agent, storefront or console yet; D4's stand-ins move order status in tests. The web app shows a placeholder page.
+- **Risk agent (D4):** `POST /merchant/process` takes an approved order (from the `CHECKOUT.ORDER.APPROVED` webhook or
+  the storefront, whichever comes first) through the check, the fixed policy, a 2-3 sentence AI rationale and the
+  PayPal action: clean is captured, a hold is authorised and waits for a reviewer, a block is never authorised. The
+  model only explains: `/merchant/decide` rejects any decision the policy didn't make, and a template rationale stands
+  in if the model fails. Read endpoints list orders, show one order with its receipts, decision and who-saw-what, give
+  the storefront a status-only view, and feed the console's event log.
+- **Demo data (D7):** `make seed` writes three ~300-entry synthetic member lists with the personas seeded: Ana (clean),
+  Ben (one email hit at Member B: hold), Cy (email and device at Members A and C: block).
+- No storefront or console yet (D5, D6). The web app shows a placeholder page.
 
 ## Roadmap
 
@@ -37,6 +45,7 @@ file tracks what exists today.
   public surface or add auth.
 - No reauthorisation endpoint: a hold older than the 3-day honour period can be reauthorised only from code (ADR 0007).
 - Live payment tests need a human to approve each sandbox order once (ADR 0007).
+- An order whose risk-agent run dies mid-way (for example, a server restart) stays `checking`; there is no sweeper yet.
 
 ## Non-goals
 

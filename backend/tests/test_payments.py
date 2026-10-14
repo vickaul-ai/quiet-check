@@ -3,12 +3,12 @@
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import decisions, events, orders
 from app.paypal import PayPalClient
 from tests.fake_paypal import _error
-from tests.standins import mark_held, record_decision, start_checking
+from tests.stored_checks import store_check
 
 ADDRESS = {
     "address_line_1": "1 Main St",
@@ -34,13 +34,16 @@ def create(api, items=None, device_id="dev-test-1") -> dict:
     return response.json()
 
 
-def approved_checking_order(api, fake, decision: str) -> dict:
-    """create -> buyer approves -> D4 stand-in: checking + decision row."""
+def processed_order(api, fake, decision: str, approve: bool = True) -> dict:
+    """create -> buyer approves -> stored check -> POST /merchant/process (the real risk agent:
+    policy, rationale, decide and its PayPal action)."""
     order = create(api)
-    fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
-    start_checking(api.app.state.engine, order["order_id"])
-    record_decision(api.app.state.engine, order["order_id"], decision)
-    return order
+    if approve:
+        fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
+    store_check(api.app.state.engine, order["order_id"], decision)
+    response = api.post("/merchant/process", json={"order_id": order["order_id"]})
+    assert response.status_code == 200, response.text
+    return {**order, "process": response.json()}
 
 
 def authorize(api, order_id: str) -> dict:
@@ -153,10 +156,11 @@ def test_token_is_cached_and_refreshed_after_401(api, fake) -> None:
 
 
 def test_clean_flow_authorize_then_policy_capture(api, fake) -> None:
-    order = approved_checking_order(api, fake, "clean")
+    order = processed_order(api, fake, "clean")
     order_id = order["order_id"]
+    assert order["process"]["status"] == "captured"
 
-    auth = authorize(api, order_id)
+    auth = authorize(api, order_id)  # a repeat: the stored authorisation
     assert auth["paypal_order_id"] == order["paypal_order_id"]
     assert auth["authorization_status"] == "CREATED"
     expires = datetime.fromisoformat(auth["expires_at"])
@@ -166,33 +170,29 @@ def test_clean_flow_authorize_then_policy_capture(api, fake) -> None:
     assert call.headers["paypal-request-id"] == f"{order_id}:authorize"
 
     (row,) = rows(api, orders, id=order_id)
-    assert row.status == "checking"  # authorize doesn't change status; decide does
+    assert row.status == "captured"
     assert row.payer_email == "ana@example.com"
     assert row.shipping_address == ADDRESS
     assert row.authorization_id == auth["authorization_id"]
-
-    response = api.post(
-        f"/payments/authorizations/{auth['authorization_id']}/capture", json={"actor": "policy"}
-    )
-    assert response.status_code == 201, response.text
-    captured = response.json()
-    assert captured["status"] == "captured"
-    assert captured["capture_status"] == "COMPLETED"
-    assert captured["amount"] == {"currency_code": "USD", "value": "49.00"}
     (call,) = fake.calls("POST", "/capture")
     assert call.headers["paypal-request-id"] == f"{order_id}:capture"
     assert json.loads(call.content) == {"final_capture": True}
 
     # Repeats return the stored result without calling PayPal.
-    assert authorize(api, order_id) == auth
     again = api.post(
         f"/payments/authorizations/{auth['authorization_id']}/capture", json={"actor": "policy"}
     )
-    assert again.status_code == 201 and again.json() == captured
+    assert again.status_code == 201
+    captured = again.json()
+    assert captured["status"] == "captured"
+    assert captured["capture_status"] == "COMPLETED"
+    assert captured["amount"] == {"currency_code": "USD", "value": "49.00"}
+    assert captured["capture_id"] == row.capture_id
     assert len(fake.calls("POST", "/authorize")) == 1
     assert len(fake.calls("POST", "/capture")) == 1
     assert event_types(api, order_id) == [
         "order.created",
+        "decision.made",
         "payment.authorized",
         "capture.requested",
         "payment.captured",
@@ -202,11 +202,10 @@ def test_clean_flow_authorize_then_policy_capture(api, fake) -> None:
 
 
 def test_hold_flow_authorize_then_reviewer_void(api, fake) -> None:
-    order = approved_checking_order(api, fake, "hold")
+    order = processed_order(api, fake, "hold")
     order_id = order["order_id"]
-    auth = authorize(api, order_id)
-    mark_held(api.app.state.engine, order_id)
-    auth_id = auth["authorization_id"]
+    assert order["process"]["status"] == "held"
+    auth_id = authorize(api, order_id)["authorization_id"]
 
     response = api.post(
         f"/payments/authorizations/{auth_id}/void",
@@ -236,9 +235,8 @@ def test_hold_flow_authorize_then_reviewer_void(api, fake) -> None:
 
 
 def test_hold_flow_reviewer_capture(api, fake) -> None:
-    order = approved_checking_order(api, fake, "hold")
+    order = processed_order(api, fake, "hold")
     auth = authorize(api, order["order_id"])
-    mark_held(api.app.state.engine, order["order_id"])
     response = api.post(
         f"/payments/authorizations/{auth['authorization_id']}/capture",
         json={"actor": "reviewer", "note": "Confirmed with buyer by phone"},
@@ -262,7 +260,11 @@ def test_authorize_needs_checking_and_paypal_approved(api, fake) -> None:
     assert response.status_code == 409
     assert response.json()["error"]["details"] == {"status": "created"}
 
-    start_checking(api.app.state.engine, order["order_id"])  # but the buyer never approved
+    # Force `checking` without approval (the risk agent itself won't start an unapproved order).
+    with api.app.state.engine.begin() as conn:
+        conn.execute(
+            update(orders).where(orders.c.id == order["order_id"]).values(status="checking")
+        )
     response = api.post(f"/payments/orders/{order['order_id']}/authorize", json={})
     assert response.status_code == 409
     assert response.json()["error"]["details"] == {"paypal_status": "CREATED"}
@@ -273,29 +275,29 @@ def test_authorize_needs_checking_and_paypal_approved(api, fake) -> None:
 
 
 def test_capture_and_void_guards(api, fake) -> None:
-    order = approved_checking_order(api, fake, "hold")
-    auth_id = authorize(api, order["order_id"])["authorization_id"]
+    held = processed_order(api, fake, "hold")
+    held_auth = authorize(api, held["order_id"])["authorization_id"]
+    captured = processed_order(api, fake, "clean")
+    captured_auth = authorize(api, captured["order_id"])["authorization_id"]
 
-    def call(action, actor):
+    def call(auth_id, action, actor):
         return api.post(f"/payments/authorizations/{auth_id}/{action}", json={"actor": actor})
 
-    # checking + hold decision: no policy capture (not clean), no reviewer actions (not held)
-    assert call("capture", "policy").status_code == 409
-    assert call("capture", "reviewer").status_code == 409
-    assert call("void", "reviewer").status_code == 409
-    mark_held(api.app.state.engine, order["order_id"])
-    assert call("capture", "policy").status_code == 409
-    assert call("void", "policy").status_code == 409
+    # held: only a reviewer may move money
+    assert call(held_auth, "capture", "policy").status_code == 409
+    assert call(held_auth, "void", "policy").status_code == 409
+    # captured: nothing left to void
+    assert call(captured_auth, "void", "reviewer").status_code == 409
     missing = api.post("/payments/authorizations/NOPE/void", json={"actor": "reviewer"})
     assert missing.status_code == 404
-    assert call("capture", "robot").status_code == 422
-    assert fake.calls("POST", "/capture") == fake.calls("POST", "/void") == []
+    assert call(held_auth, "capture", "robot").status_code == 422
+    assert len(fake.calls("POST", "/capture")) == 1  # the clean order's policy capture
+    assert fake.calls("POST", "/void") == []
 
 
 def test_capture_paypal_error_leaves_order_held(api, fake) -> None:
-    order = approved_checking_order(api, fake, "hold")
+    order = processed_order(api, fake, "hold")
     auth_id = authorize(api, order["order_id"])["authorization_id"]
-    mark_held(api.app.state.engine, order["order_id"])
     fake.fail_next["/capture"] = _error(422, "UNPROCESSABLE_ENTITY", "AUTHORIZATION_EXPIRED")
     response = api.post(f"/payments/authorizations/{auth_id}/capture", json={"actor": "reviewer"})
     assert response.status_code == 502
@@ -307,18 +309,22 @@ def test_capture_paypal_error_leaves_order_held(api, fake) -> None:
 
 def test_authorize_reuses_an_authorization_paypal_already_made(api, fake) -> None:
     """A crash after PayPal authorised but before we stored it: the retry reads it back."""
-    order = approved_checking_order(api, fake, "clean")
+    order = create(api)
+    fake.approve(order["paypal_order_id"], "ana@example.com", ADDRESS)
     paypal_client = PayPalClient(
         "https://api-m.sandbox.paypal.com", "fake-id", "fake-secret", transport=fake.transport
     )
     api.portal.call(paypal_client.authorize_order, order["paypal_order_id"], "elsewhere")
+    store_check(api.app.state.engine, order["order_id"], "clean")
+    response = api.post("/merchant/process", json={"order_id": order["order_id"]})
+    assert response.status_code == 200, response.text
     auth = authorize(api, order["order_id"])
     assert auth["authorization_id"] in fake.authorizations
     assert len(fake.calls("POST", "/authorize")) == 1
 
 
 def test_reauthorize_client_method(api, fake) -> None:
-    order = approved_checking_order(api, fake, "hold")
+    order = processed_order(api, fake, "hold")
     auth_id = authorize(api, order["order_id"])["authorization_id"]
     paypal_client = api.app.state.paypal
     new = api.portal.call(paypal_client.reauthorize_authorization, auth_id, "x:reauthorize")

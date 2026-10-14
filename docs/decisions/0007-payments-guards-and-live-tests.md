@@ -38,3 +38,6 @@ can be approved only by a buyer in a browser, and webhooks reach the backend onl
   scheme for `/risk/check`, `/merchant/decide` and the `/payments` actions, or keeps them off the public surface.
 - Fixed in the same review: the webhook body cap now applies while streaming (it used to read the whole body first),
   and unverified deliveries store only their claimed ID and type.
+
+_Update (D4, 2026-10-13): `tests/standins.py` is gone. Tests and the live scripts use the real `/merchant/process`
+(ADR 0008); tests without member processes write a completed check with `tests/stored_checks.py`._

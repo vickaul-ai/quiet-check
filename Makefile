@@ -1,5 +1,5 @@
 .PHONY: install dev dev-backend dev-web dev-member-A dev-member-B dev-member-C check sandbox \
-	approve-orders test-live gate-a
+	seed approve-orders test-live gate-a live-personas
 
 install:
 	cd backend && uv sync
@@ -11,7 +11,7 @@ dev:
 dev-backend:
 	cd backend && uv run uvicorn app.main:app --reload --port 8000
 
-# Consortium members on :8101-8103. Each needs backend/var/members/<M>/list.csv (D7 seeds them).
+# Consortium members on :8101-8103. Each needs backend/var/members/<M>/list.csv (`make seed`).
 dev-member-A dev-member-B dev-member-C:
 	cd backend && uv run python -m app.consortium.member $(subst dev-member-,,$@)
 
@@ -25,6 +25,10 @@ check:
 sandbox:
 	uv run scripts/check_sandbox.py
 
+# Demo member lists (D7): ~300 synthetic entries each plus the persona seeds. Needs PERSONA_*_EMAIL in .env.
+seed:
+	cd backend && uv run python scripts/seed.py
+
 # Live PayPal sandbox runs (ADR 0007): stop dev-backend first and keep `ngrok http 8000` running.
 approve-orders:
 	cd backend && uv run python scripts/approve_orders.py --count $(or $(COUNT),2)
@@ -34,3 +38,7 @@ test-live:
 
 gate-a:
 	cd backend && uv run python scripts/gate_a.py --end $(or $(END),capture)
+
+# D4 + D7 live acceptance: one order per persona, approved in the browser, decided by the webhook alone.
+live-personas:
+	cd backend && uv run python scripts/live_personas.py
