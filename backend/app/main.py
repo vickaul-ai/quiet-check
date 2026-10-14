@@ -6,6 +6,7 @@ D2 added /risk and the in-process AP3 initiator; D3 /catalog, /payments and /web
 
 import asyncio
 import hmac
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -35,6 +36,24 @@ PUBLIC_ROUTES = (
 )
 
 
+def log_app_lines_on_render() -> None:
+    """Send our INFO lines (one per order stage, "order <id>: ...") to stderr on Render (its logs).
+
+    uvicorn configures only its own loggers, so until D10 only warnings reached Render's logs.
+    Hosted only, like the other Render settings: tests and the live scripts set up logging
+    themselves. Lines still propagate to the root logger, so anything a caller adds sees them."""
+    app_logger = logging.getLogger("quietcheck")
+    if not os.environ.get("RENDER") or any(
+        getattr(h, "quietcheck_stdout", False) for h in app_logger.handlers
+    ):
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    handler.quietcheck_stdout = True
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
+
+
 def is_public(method: str, path: str) -> bool:
     return any(method == m and pattern.fullmatch(path) for m, pattern in PUBLIC_ROUTES)
 
@@ -44,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if os.environ.get("RENDER") and not settings.api_token:
         # Render sets RENDER=true. Hosted, the money endpoints must never be open.
         raise RuntimeError("BACKEND_API_TOKEN must be set on Render")
+    log_app_lines_on_render()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

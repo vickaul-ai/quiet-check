@@ -164,10 +164,13 @@ async def to_pay_button(browser: Browser, web: str, run: Run, creds: tuple[str, 
 async def approve_and_check(page: Page, popup: Page, pay, run: Run, console: Console) -> None:
     run.mark("approve")
     await pay.click()
-    await popup.wait_for_event("close", timeout=60_000)
-    run.mark("popup_closed")
-    await page.get_by_role("status").wait_for(timeout=30_000)
-    if not run.order_id:
+    # Not the pop-up closing: PayPal keeps it open until the shop's onApprove returns, and that
+    # waits for the decision (up to 2 minutes), so an undecided order keeps it open.
+    for _ in range(60):
+        if run.order_id:
+            break
+        await asyncio.sleep(1)
+    else:
         raise RuntimeError("the shop never called /api/orders/<id>/process")
     detail = await wait_until_final(console, run.order_id)
     run.mark("decided")
@@ -195,7 +198,7 @@ async def verify(run: Run, detail: dict, page: Page) -> None:
     if decision.get("rationale_source") != run.expect_rationale:
         run.problems.append(f"rationale_source {decision.get('rationale_source')}")
     text = BUYER_TEXT.get(want)
-    if text:
+    if text and detail["status"] == want:
         try:
             await page.get_by_role("status").filter(has_text=text).wait_for(timeout=20_000)
         except Exception:
@@ -313,7 +316,14 @@ async def main_async(args) -> int:
                     f"{run.label}: {run.order_id or '-'} {run.status or 'not decided'}", flush=True
                 )
         await browser.close()
-    events = await console.events(cursor)
+    events = []
+    for _ in range(3):  # the web can lose the backend for a minute after a redeploy
+        try:
+            events = await console.events(cursor)
+            break
+        except httpx.HTTPError as exc:
+            print(f"reading events failed ({type(exc).__name__}); retrying", file=sys.stderr)
+            await asyncio.sleep(20)
     failed = 0
     for run in runs:
         if run.order_id:

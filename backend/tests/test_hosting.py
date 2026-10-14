@@ -3,6 +3,7 @@ from env vars, and the hosted URLs derived from Render's env vars."""
 
 import base64
 import json
+import logging
 import os
 
 import httpx
@@ -91,6 +92,24 @@ def test_render_requires_a_token(monkeypatch) -> None:
     monkeypatch.setenv("RENDER", "true")
     with pytest.raises(RuntimeError, match="BACKEND_API_TOKEN"):
         create_app(Settings(start_initiator=False))
+
+
+def test_render_logs_app_info_lines_once(monkeypatch, capsys) -> None:
+    """uvicorn configures only its own loggers; hosted, our INFO lines must still be printed."""
+    logger = logging.getLogger("quietcheck")
+    before = list(logger.handlers), logger.level
+    monkeypatch.setenv("RENDER", "true")
+    try:
+        create_app(Settings(start_initiator=False, api_token="t"))
+        create_app(Settings(start_initiator=False, api_token="t"))
+        mine = [h for h in logger.handlers if getattr(h, "quietcheck_stdout", False)]
+        assert len(mine) == 1
+        logging.getLogger("quietcheck.merchant").info("order ord_X: risk agent started")
+        printed = capsys.readouterr().err
+        assert "INFO quietcheck.merchant: order ord_X: risk agent started" in printed
+    finally:
+        logger.handlers[:] = before[0]
+        logger.setLevel(before[1])
 
 
 # /merchant/start and the workflow trigger
