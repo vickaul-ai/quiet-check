@@ -51,8 +51,10 @@ services:
         fromService: { name: quietcheck-member-b, type: pserv, property: host }
       - key: MEMBER_C_HOST
         fromService: { name: quietcheck-member-c, type: pserv, property: host }
-      - key: RISK_WORKFLOW_SLUG
-        fromService: { name: quietcheck-risk, type: workflow, property: slug }
+      # A plain value, not a fromService reference: the workflow already references the backend,
+      # and Render refuses reference cycles. Check it against the task's page in the dashboard.
+      - key: RISK_WORKFLOW_TASK
+        value: quietcheck-risk/process_order
       - key: RENDER_API_KEY # starts the risk workflow's task runs
         sync: false
       - key: PAYPAL_CLIENT_ID
@@ -121,8 +123,11 @@ services:
         value: never
       - key: MEMBER_PRIVATE_KEY
         generateValue: true
-      - key: INITIATOR_HOST # the only initiator this member answers
-        fromService: { name: quietcheck-backend, type: web, property: host }
+      # The only initiator this member answers: the backend's internal hostname (Render may add
+      # a suffix). A pattern, because a fromService reference back to the backend, which already
+      # references the members, is a cycle Render refuses.
+      - key: INITIATOR_URL_PATTERN
+        value: http://quietcheck-backend(-[a-z0-9]+)?:8100
       - key: PERSONA_CY_EMAIL # Cy's sandbox buyer email, seeded on A
         sync: false
 
@@ -143,8 +148,8 @@ services:
         value: never
       - key: MEMBER_PRIVATE_KEY
         generateValue: true
-      - key: INITIATOR_HOST
-        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: INITIATOR_URL_PATTERN
+        value: http://quietcheck-backend(-[a-z0-9]+)?:8100
       - key: PERSONA_BEN_EMAIL # Ben's sandbox buyer email, seeded on B
         sync: false
 
@@ -165,8 +170,8 @@ services:
         value: never
       - key: MEMBER_PRIVATE_KEY
         generateValue: true
-      - key: INITIATOR_HOST
-        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: INITIATOR_URL_PATTERN
+        value: http://quietcheck-backend(-[a-z0-9]+)?:8100
       - key: PERSONA_CY_EMAIL # Cy's sandbox buyer email, seeded on C
         sync: false
 

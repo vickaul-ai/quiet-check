@@ -48,3 +48,26 @@ def test_allowlist_matches_normalised_urls(tmp_path) -> None:
     bad = forged_envelope("http://127.0.0.1:8100", "http://x")
     bad.privacy_intent["participants"] = "http://127.0.0.1:8100"
     assert not agent.initiator_allowed(bad)
+
+
+def test_allowlist_pattern_for_hosted_hostnames(tmp_path) -> None:
+    """D9: Render's suffixed backend hostname, matched by a full-match pattern."""
+    write_lists(tmp_path, {}, filler_per_member=3)
+    agent = build_member(
+        "C",
+        free_port(),
+        tmp_path,
+        allowed_initiator_pattern=r"http://quietcheck-backend(-[a-z0-9]+)?:8100",
+    )
+    assert agent.allowed_initiators == frozenset()  # no localhost default with a pattern
+    for ok in ("http://quietcheck-backend:8100", "HTTP://quietcheck-backend-ab12:8100/"):
+        assert agent.initiator_allowed(forged_envelope(ok, "http://x"))
+    for bad in (
+        "http://quietcheck-backend-ab12:8101",
+        "http://quietcheck-backend-ab12.evil.example:8100",
+        "http://evil-quietcheck-backend:8100",
+        "http://169.254.169.254/latest/meta-data",
+        "http://127.0.0.1:8100",
+        "http://quietcheck-backend-ab12:8100/x",
+    ):
+        assert not agent.initiator_allowed(forged_envelope(bad, "http://x")), bad

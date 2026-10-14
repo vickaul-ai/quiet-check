@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,9 +59,21 @@ class MemberAgent(PrivacyAgent):
     any signature, so it must be one we already trust.
     """
 
-    def __init__(self, *, allowed_initiator_urls: list[str], **kwargs):
+    def __init__(
+        self,
+        *,
+        allowed_initiator_urls: list[str],
+        allowed_initiator_pattern: str | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.allowed_initiators = frozenset(normalize_url(u) for u in allowed_initiator_urls)
+        # Hosted (D9): Render gives the backend's internal hostname a suffix we can't know in
+        # the Blueprint without a reference cycle, so a full-match pattern on the normalised URL
+        # (e.g. http://quietcheck-backend(-[a-z0-9]+)?:8100) can stand in for it.
+        self.allowed_pattern = (
+            re.compile(allowed_initiator_pattern) if allowed_initiator_pattern else None
+        )
 
     def initiator_allowed(self, envelope: ProtocolEnvelope) -> bool:
         intent = envelope.privacy_intent
@@ -70,7 +83,12 @@ class MemberAgent(PrivacyAgent):
         if not isinstance(participants, list) or not participants:
             return False
         initiator = participants[0]
-        return isinstance(initiator, str) and normalize_url(initiator) in self.allowed_initiators
+        if not isinstance(initiator, str):
+            return False
+        url = normalize_url(initiator)
+        return url in self.allowed_initiators or bool(
+            self.allowed_pattern and self.allowed_pattern.fullmatch(url)
+        )
 
     async def handle_envelope(self, envelope: ProtocolEnvelope) -> ProtocolEnvelope | None:
         if not self.initiator_allowed(envelope):
@@ -98,6 +116,7 @@ def build_member(
     allowed_initiator_urls: list[str] | None = None,
     card_url: str | None = None,
     private_key: str | None = None,
+    allowed_initiator_pattern: str | None = None,
 ) -> MemberAgent:
     folder = data_dir / member
     list_path = folder / "list.csv"
@@ -110,9 +129,13 @@ def build_member(
         data_hash=list_digest(rows),
         last_updated=datetime.fromtimestamp(list_path.stat().st_mtime, UTC),
     )
-    allowed = allowed_initiator_urls or [DEFAULT_INITIATOR_URL]
+    # With only a pattern, the localhost default isn't added.
+    allowed = allowed_initiator_urls or (
+        [] if allowed_initiator_pattern else [DEFAULT_INITIATOR_URL]
+    )
     agent = MemberAgent(
         allowed_initiator_urls=allowed,
+        allowed_initiator_pattern=allowed_initiator_pattern,
         name=f"Member {member}",
         description=f"Quiet Check consortium member {member}: abuse list (PSI receiver)",
         # Must equal the URL the initiator uses for this member (the SDK checks it).
@@ -136,7 +159,8 @@ def build_member(
         host,
         port,
         card_url or f"http://{host}:{port}",
-        ", ".join(sorted(agent.allowed_initiators)),
+        ", ".join(sorted(agent.allowed_initiators))
+        + (f", or matching {allowed_initiator_pattern}" if allowed_initiator_pattern else ""),
     )
     return agent
 
@@ -186,8 +210,9 @@ def main() -> None:
             card_url=args.card_url or os.environ.get("MEMBER_CARD_URL") or own_private_url(port),
             # Hosted (D9): the key comes from the env, since the disk is wiped on deploy.
             private_key=os.environ.get("MEMBER_PRIVATE_KEY"),
+            allowed_initiator_pattern=os.environ.get("INITIATOR_URL_PATTERN") or None,
         )
-    except (ListFileError, ValueError) as exc:
+    except (ListFileError, ValueError, re.error) as exc:
         # Never start with a missing or empty list (every check would come back clean) or a bad key.
         sys.exit(f"Member {args.member}: {exc}")
     asyncio.run(serve(agent))

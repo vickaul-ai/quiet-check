@@ -38,6 +38,11 @@ Its stages, for reference:
 7. `scripts/check_hosted.sh <backend URL> <web URL>`: public routes answer, private ones refuse.
 8. Run Ana, Ben and Cy on the hosted shop (log out at www.sandbox.paypal.com between buyers).
 
+## Changing `render.yaml`
+
+Validate before pushing with the Render CLI (`render login`, `render workspace set`, then
+`render blueprints validate render.yaml`). It checks references and cycles, which the published JSON schema doesn't.
+
 ## Day to day
 
 - **Deploys:** push to `main`; each service redeploys after CI passes, only if its paths changed (`buildFilter`).
@@ -52,8 +57,8 @@ Its stages, for reference:
 - **If orders show `runner: in_process, reason: stalled`:** Render started the workflow run but it didn't reach the
   backend within 45 s; open the run in Render (`quietcheck-risk`) for its error (often `BACKEND_HOST` or the token).
   Orders still get decided in-process.
-- **If the workflow isn't used** (feed shows `runner: in_process` with no reason): check `RENDER_API_KEY` and `RISK_WORKFLOW_SLUG` on
-  the backend; the backend logs `workflow run not started (<error>)`. Orders still get decided in-process.
+- **If the workflow isn't used** (feed shows `runner: in_process` with no reason): check `RENDER_API_KEY` and
+  `RISK_WORKFLOW_TASK` (must equal the slug on `process_order`'s task page in the dashboard) on the backend; the backend logs `workflow run not started (<error>)`. Orders still get decided in-process.
 - **Keys:** `INITIATOR_PRIVATE_KEY` and `MEMBER_PRIVATE_KEY` are generated once; don't change them. Stored receipts
   keep their `verified` flag, but re-verifying an old receipt needs the initiator key that signed it.
 

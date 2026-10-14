@@ -15,7 +15,8 @@ Any session that changes an interface updates this file in the same change and n
 
 **Hosted on Render (D9, ADR 0011; `render.yaml`):** backend and web are public web services; Members A-C are private
 services; Postgres and the workflow are private. All share region `oregon`. Services find each other by internal
-hostname (`fromService ... host` in the Blueprint): the web and workflow reach the backend at `http://<host>:10000`,
+hostname (`fromService ... host` in the Blueprint; Render refuses reference cycles, so only the web, the workflow and
+the backend reference others, and members match the backend by `INITIATOR_URL_PATTERN`): the web and workflow reach the backend at `http://<host>:10000`,
 the initiator listens on `0.0.0.0:8100` and each member on its usual port; each builds its card URL from its internal hostname (`$RENDER_DISCOVERY_SERVICE` minus `-discovery`, which Render documents as `<internal hostname>-discovery`; else `$RENDER_SERVICE_NAME`),
 as `http://<host>:<port>`. A member's card URL must equal the backend's `MEMBER_<M>_URL`.
 
@@ -625,7 +626,8 @@ writes the same bytes as `make seed`.
 
 **Initiator allowlist** (ADR 0006): a member answers only initiators whose URL (the first entry of the intent's
 `participants`, compared after the SDK's `normalize_url`) is on its allowlist, set with `--initiator-url` (repeatable;
-default `$INITIATOR_URL`, else `http://$INITIATOR_HOST:8100`, else `http://127.0.0.1:8100`). Anything else gets an AP3 error envelope with `error_code: "INITIATOR_NOT_ALLOWED"`,
+default `$INITIATOR_URL`, else `http://$INITIATOR_HOST:8100`, else `http://127.0.0.1:8100`), or whose URL fully matches
+`INITIATOR_URL_PATTERN` (hosted, D9). Anything else gets an AP3 error envelope with `error_code: "INITIATOR_NOT_ALLOWED"`,
 before the member fetches any URL, and the backend reports `502 member_unavailable`.
 
 Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
@@ -649,10 +651,11 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `BACKEND_API_TOKEN` | Backend; web (server only); workflow | Hosted (D9): the backend's bearer token (Blueprint `generateValue`, shared with `fromService ... envVarKey`). Unset locally: no auth |
 | `CONSOLE_PASSWORD` | Web (server only) | Hosted (D9): the console's shared password (HTTP Basic, any username). Unset: console open in `next dev`, `503` in production |
 | `RENDER_API_KEY` | Backend | Hosted (D9): starts the risk workflow's task runs. Unset: the risk agent runs in-process |
-| `RISK_WORKFLOW_SLUG`, `RISK_WORKFLOW_TASK` | Backend | Hosted (D9): the workflow's slug (Blueprint `property: slug`; the task is `<slug>/process_order`), or the full task ID |
+| `RISK_WORKFLOW_TASK`, `RISK_WORKFLOW_SLUG` | Backend | Hosted (D9): the task ID (the Blueprint sets `quietcheck-risk/process_order` as a plain value; compare it with the task's page in the dashboard), or the workflow's slug (task `<slug>/process_order`) |
 | `INITIATOR_PRIVATE_KEY`, `MEMBER_PRIVATE_KEY` | Backend; each member | Hosted (D9): AP3 Ed25519 keys (32 bytes, base64 or hex). Unset: the key files under `backend/var/` |
 | `MEMBER_A_HOST`, `MEMBER_B_HOST`, `MEMBER_C_HOST` (or `MEMBER_<M>_URL`) | Backend | Hosted (D9): each member's internal hostname (URL `http://<host>:8101` etc.), or a full URL. Default `http://127.0.0.1:810x` |
-| `INITIATOR_HOST` (or `INITIATOR_URL`) | Each member | Hosted (D9): the backend's internal hostname; the member allows only `http://<host>:8100` |
+| `INITIATOR_URL_PATTERN` | Each member | Hosted (D9): a full-match pattern for allowed initiator URLs, after `normalize_url`; the Blueprint sets `http://quietcheck-backend(-[a-z0-9]+)?:8100` (a `fromService` reference back to the backend would be a cycle Render refuses) |
+| `INITIATOR_HOST` (or `INITIATOR_URL`) | Each member | Optional: the backend's hostname; the member then allows `http://<host>:8100` |
 | `INITIATOR_URL`, `INITIATOR_BIND`, `INITIATOR_PORT` | Backend | The initiator's card URL (default on Render `http://<own internal hostname>:8100`, else `http://127.0.0.1:8100`), listen address (Render `0.0.0.0`, else `127.0.0.1`) and port (`8100`) |
 | `MEMBER_CARD_URL` | Each member | Override for the member's card URL (default on Render `http://<own internal hostname>:<port>`) |
 | `QC_TEST_POSTGRES_URL` | Backend tests | Optional: run the suite on Postgres, one fresh database per test app (CI does, D9) |

@@ -18,6 +18,11 @@ at $10.
   `RENDER_DISCOVERY_SERVICE`, which Render's private-network docs define as `<internal hostname>-discovery`, falling
   back to `RENDER_SERVICE_NAME`. That equality is documented only indirectly, so `INITIATOR_URL`, `MEMBER_CARD_URL` and
   `MEMBER_<M>_URL` override it without a code change, and the start-up logs print both sides.
+- **No reference cycles.** Render's validator refuses `fromService` cycles (found on first deploy: "unresolved cycle";
+  its published JSON schema doesn't catch it, `render blueprints validate` does). The backend references the members
+  and the database; the web and the workflow reference the backend. Members allow the backend by a full-match pattern,
+  `http://quietcheck-backend(-[a-z0-9]+)?:8100` (only services in the workspace can reach a private service), and the
+  backend's workflow task ID is a plain value, `quietcheck-risk/process_order`, checked against the dashboard.
 - **Backend token gate.** Hosted, every backend route needs `Authorization: Bearer $BACKEND_API_TOKEN` except
   `/health`, the PayPal webhook (signature-verified) and the status-only endpoint. The backend refuses to start on
   Render without the token. The backend stays a public web service because PayPal must reach the webhook.
