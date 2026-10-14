@@ -30,7 +30,7 @@ make dev                  # backend on :8000, web on :3000
 | `make approve-orders` | Creates sandbox orders, prints approval links, saves approved orders for live runs (needs `ngrok http 8000`, `make dev-backend` stopped) |
 | `make test-live` | `pytest -m live`: the risk agent on 2 saved orders (clean -> capture; hold -> reviewer void), waiting for verified webhooks |
 | `make gate-a END=capture` | Gate A on 1 saved order: the risk agent -> capture (or `END=void`: hold -> reviewer void) |
-| `make live-personas` | Ana, Ben and Cy through the sandbox: approve 3 printed links as the 3 persona buyers; the webhook alone must give captured, held and blocked |
+| `make live-personas` | Ana, Ben and Cy through the sandbox: approve 3 printed links as the 3 persona buyers; the webhook alone must give captured, held and blocked. `scripts/live_personas.py --persona ben` reruns a subset. Log out of sandbox PayPal between buyers: the checkout reuses the last login, even across incognito windows |
 
 ## Environment variables
 

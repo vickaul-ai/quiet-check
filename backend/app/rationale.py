@@ -73,7 +73,9 @@ def _model(settings: Settings):
         f"{settings.llm_provider}:{settings.llm_model_fast}",
         timeout=settings.rationale_timeout_s,
         max_retries=1,
-        max_tokens=300,
+        # Room for a thinking block before the answer: Haiku sometimes thinks first, and a
+        # 300-token cap produced an empty reply once in the live persona run (2026-10-13).
+        max_tokens=1024,
     )
 
 
@@ -81,6 +83,16 @@ def _text(response) -> str:
     text = getattr(response, "text", None)
     text = str(text) if text is not None else str(getattr(response, "content", ""))
     return " ".join(text.split())[:MAX_CHARS]
+
+
+async def _ask(model, messages) -> str:
+    """One answer, asking a second time if the first reply has no text."""
+    for attempt in (1, 2):
+        text = _text(await model.ainvoke(messages))
+        if text:
+            return text
+        logger.warning("rationale model returned no text (attempt %d)", attempt)
+    return ""
 
 
 async def write_rationale(settings: Settings, decision: str, hits: list[dict]) -> tuple[str, str]:
@@ -92,13 +104,10 @@ async def write_rationale(settings: Settings, decision: str, hits: list[dict]) -
             ("system", PROMPT_PATH.read_text()),
             ("human", json.dumps(summary)),
         ]
-        response = await asyncio.wait_for(
-            model.ainvoke(messages), timeout=settings.rationale_timeout_s
-        )
-        text = _text(response)
+        text = await asyncio.wait_for(_ask(model, messages), timeout=settings.rationale_timeout_s)
         if text:
             return text, "llm"
-        logger.warning("rationale model returned no text; using the template")
+        logger.warning("rationale model gave no text twice; using the template")
     except Exception as exc:  # any model, network or timeout error: the decision still goes ahead
         logger.warning("rationale model failed (%s); using the template", type(exc).__name__)
     return template_rationale(summary), "template"

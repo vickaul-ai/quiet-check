@@ -159,6 +159,16 @@ def test_model_failure_falls_back_to_the_template(merchant, mode) -> None:
     assert decision["rationale_source"] == "template"
 
 
+def test_one_empty_reply_is_retried(merchant) -> None:
+    client, fake, model = merchant
+    model.mode = "empty_once"
+    order = create_approved(client, fake, "ben")
+    client.post("/merchant/process", json={"order_id": order["order_id"]})
+    decision = client.get(f"/merchant/orders/{order['order_id']}").json()["decision"]
+    assert (decision["rationale"], decision["rationale_source"]) == (model.reply, "llm")
+    assert len(model.calls) == 2
+
+
 def test_decide_rejects_a_decision_the_policy_didnt_make(merchant) -> None:
     client, fake, _model = merchant
     order = create_approved(client, fake, "ben")

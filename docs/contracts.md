@@ -287,7 +287,8 @@ Details (D4):
 - A failed check (`502 member_unavailable`, or `409 invalid_state` with `details.missing`) or a failed PayPal call
   (`502 paypal_error`) sets the order to `failed` and returns that error. A rerun reuses the stored check if it
   completed and the stored decision and rationale if one was made (no new model call), then resumes the PayPal action.
-- The rationale call has a 10 s timeout. On any model error, timeout or empty reply, the decision still goes ahead with
+- The rationale call has a 10 s timeout (one retry on an empty reply, inside the same 10 s). On any model error,
+  timeout or second empty reply, the decision still goes ahead with
   a template rationale built from the same hit summary, e.g. "Automatic explanation unavailable. Policy decision: hold.
   1 hit: Member B, email. Address and device were clear at all members." The `decision.made` event then has
   `rationale_source: "template"` (otherwise `"llm"`).

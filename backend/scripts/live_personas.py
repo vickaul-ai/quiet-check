@@ -1,6 +1,7 @@
 """D4 + D7 live acceptance: the three personas through the PayPal sandbox, driven by webhooks.
 
     make seed && make live-personas
+    cd backend && uv run python scripts/live_personas.py --persona ben --persona cy   # a subset
 
 Needs: the seeded member lists (`make seed`), `make dev` stopped (this serves the backend on
 :8000 and starts its own members on spare ports, reading the same lists), `ngrok http 8000`
@@ -49,9 +50,9 @@ async def approval_link(settings, paypal_order_id: str) -> str:
     return next(x["href"] for x in order["links"] if x["rel"] == "approve")
 
 
-def run(app, client: httpx.Client, settings, emails: dict[str, str]) -> int:
+def run(app, client: httpx.Client, settings, emails: dict[str, str], keys: list[str]) -> int:
     created = []
-    for persona in load_personas():
+    for persona in [p for p in load_personas() if p["key"] in keys]:
         response = client.post(
             "/payments/orders",
             json={
@@ -101,12 +102,16 @@ def run(app, client: httpx.Client, settings, emails: dict[str, str]) -> int:
             print(f"   {event_type}: {state}")
         ok = ok and set(seen) == expected and all(seen.values())
         passed = passed and ok
-    print("\nAll three personas passed." if passed else "\nPersona run FAILED.")
+    names = ", ".join(p["name"] for p, _o in created)
+    print(f"\nPassed: {names}." if passed else "\nPersona run FAILED.")
     return 0 if passed else 1
 
 
 def main() -> int:
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    keys = [p["key"] for p in load_personas()]
+    parser.add_argument("--persona", action="append", choices=keys, help="default: all three")
+    args = parser.parse_args()
     sys.stdout.reconfigure(line_buffering=True)
     missing = [m for m in MEMBERS if not (member_data_dir() / m / "list.csv").exists()]
     if missing:
@@ -124,7 +129,7 @@ def main() -> int:
     with live.consortium(None, log_dir) as overrides:
         settings = live.live_settings(**overrides)
         with live.serve(settings) as app, httpx.Client(base_url=live.BASE_URL, timeout=120) as c:
-            return run(app, c, settings, emails)
+            return run(app, c, settings, emails, args.persona or keys)
 
 
 if __name__ == "__main__":
