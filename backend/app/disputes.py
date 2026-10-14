@@ -420,7 +420,9 @@ def _model(settings: Settings):
         f"{settings.llm_provider}:{settings.llm_model_smart}",
         timeout=settings.dispute_timeout_s,
         max_retries=1,
-        max_tokens=2048,
+        # Sonnet thinks before it writes, and the thinking counts against max_tokens: at 2048 the
+        # first live draft (2026-10-14) stopped mid-word. A cut-off reply goes to the template.
+        max_tokens=8192,
     )
 
 
@@ -437,6 +439,9 @@ async def write_draft(settings: Settings, facts: dict, order_id: str) -> tuple[s
         response = await asyncio.wait_for(
             model.ainvoke(messages), timeout=settings.dispute_timeout_s
         )
+        if (getattr(response, "response_metadata", None) or {}).get("stop_reason") == "max_tokens":
+            logger.warning("order %s: dispute reply cut off; using the template", order_id)
+            return template_note(facts), "template"
         note = clean_note(_text(response))
         if note:
             return note, "llm"

@@ -167,6 +167,15 @@ def test_model_failure_falls_back_to_the_template(api, fake, model) -> None:
     assert drafted.payload["draft_source"] == "template"
 
 
+def test_cut_off_reply_falls_back_to_the_template(api, fake, model) -> None:
+    order = captured_order(api, fake)
+    model.mode = "cut_off"
+    dispute = open_dispute(api, fake, model, order)
+    row = dispute_row(api, dispute["dispute_id"])
+    assert row.draft_source == "template"
+    assert "not proof of the buyer's identity" in row.draft_note
+
+
 def test_template_and_long_replies_fit_paypal_limit(api, fake, model) -> None:
     order = captured_order(api, fake)
     # Real AP3 session IDs are long; the template drops them before going over 2000 characters.

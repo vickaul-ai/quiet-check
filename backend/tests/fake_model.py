@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 
 class FakeModel:
     def __init__(self) -> None:
-        self.mode = "ok"  # "ok", "error", "slow", "empty" or "empty_once"
+        self.mode = "ok"  # "ok", "error", "slow", "empty", "empty_once" or "cut_off"
         self.reply = "Fake rationale: the policy decided this from the hit summary."
         self.calls: list[list] = []
 
@@ -20,4 +20,7 @@ class FakeModel:
         if self.mode == "empty_once":
             self.mode = "ok"
             return AIMessage(content="")
+        if self.mode == "cut_off":  # the reply hit max_tokens mid-sentence
+            cut = {"stop_reason": "max_tokens"}
+            return AIMessage(content=self.reply[:20], response_metadata=cut)
         return AIMessage(content="" if self.mode == "empty" else self.reply)
