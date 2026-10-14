@@ -109,8 +109,9 @@ failure), upserts the `disputes` row, claims the draft (`draft_source: "pending"
 ID, hashes and reviewer notes. A model error, 60 s timeout or empty reply gives `template_note` from the same facts.
 Settings take a `dispute_model` so tests inject a fake (the same `FakeModel` as the rationale). `submit_evidence`
 (behind `POST /merchant/disputes/{id}/evidence`) re-reads the dispute, refuses with `409
-dispute_not_awaiting_evidence` unless PayPal is `WAITING_FOR_SELLER_RESPONSE` with a provide-evidence link, then
-`PayPalClient.provide_evidence` sends multipart/form-data with an `input` JSON part (httpx `files=`). Console:
+dispute_not_awaiting_evidence` unless PayPal is `WAITING_FOR_SELLER_RESPONSE` with a provide-evidence link, and with
+`409 evidence_needs_details` when PayPal asked for tracking, refund or return details; then
+`PayPalClient.provide_evidence` sends the requested evidence type (else `OTHER`) as multipart/form-data with an `input` JSON part (httpx `files=`). Console:
 `DisputeCard` in `components/console.tsx` (editable note, in-page confirmation) posts to
 `app/api/console/disputes/[disputeId]/evidence/route.ts`. The fake PayPal (`tests/fake_paypal.py`) keeps disputes,
 parses the multipart `input` part and implements require-evidence; `tests/test_disputes.py` covers the flow.

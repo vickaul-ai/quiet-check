@@ -111,6 +111,25 @@ def can_provide_evidence(dispute: dict) -> bool:
     return False
 
 
+# Evidence types PayPal takes only with structured details we don't have in this demo (tracking,
+# refund or return IDs in `evidence_info`); a note alone is refused (EVIDENCE_TYPE_IS_NOT_ALLOWED,
+# seen live 2026-10-14 on an item-not-received inquiry that asked for PROOF_OF_FULFILLMENT).
+NEEDS_DETAILS = {"PROOF_OF_FULFILLMENT", "PROOF_OF_REFUND", "PROOF_OF_RETURN"}
+EVIDENCE_TEXT = {
+    "PROOF_OF_FULFILLMENT": "proof of fulfilment (shipment tracking)",
+    "PROOF_OF_REFUND": "proof of refund (refund IDs)",
+    "PROOF_OF_RETURN": "proof of return (return tracking)",
+}
+
+
+def requested_evidence_type(dispute: dict) -> str | None:
+    """The evidence type PayPal asked the seller for (the newest REQUESTED_FROM_SELLER entry)."""
+    asked = [
+        e for e in dispute.get("evidences") or [] if e.get("source") == "REQUESTED_FROM_SELLER"
+    ]
+    return asked[-1].get("evidence_type") if asked else None
+
+
 # Storing
 
 
@@ -553,8 +572,19 @@ async def submit_evidence(engine: Engine, paypal: PayPalClient, dispute_id: str,
             f"PayPal dispute is {status}; evidence can be sent only when PayPal asks the seller.",
             {"dispute_status": status},
         )
+    evidence_type = requested_evidence_type(dispute) or "OTHER"
+    if evidence_type in NEEDS_DETAILS:
+        raise APIError(
+            409,
+            "evidence_needs_details",
+            f"PayPal is asking for {EVIDENCE_TEXT[evidence_type]}, which a note can't provide. "
+            "Respond in PayPal's Resolution Center.",
+            {"dispute_status": status, "requested_evidence_type": evidence_type},
+        )
     try:
-        await paypal.provide_evidence(dispute_id, note, request_id=f"{dispute_id}:evidence")
+        await paypal.provide_evidence(
+            dispute_id, note, evidence_type=evidence_type, request_id=f"{dispute_id}:evidence"
+        )
     except PayPalError as exc:
         raise paypal_error(engine, row.order_id, "provide_evidence", exc) from None
     with engine.begin() as conn:

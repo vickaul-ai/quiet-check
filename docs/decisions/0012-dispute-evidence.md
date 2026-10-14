@@ -27,8 +27,12 @@ buyer's name and email.
   dispute_not_awaiting_evidence` unless PayPal is asking the seller for evidence, so a stale console can't send
   evidence PayPal would reject. Submission is idempotent on the dispute ID and sends `PayPal-Request-Id:
   <dispute_id>:evidence`.
-- **Notes-only evidence** (`evidence_type: OTHER`, which PayPal's sandbox guide gives for internal disputes), sent as
-  `multipart/form-data` with an `input` JSON part, as in PayPal's Disputes API guide. No documents yet.
+- **Notes-only evidence of the type PayPal asked for** (else `OTHER`), sent as `multipart/form-data` with an `input`
+  JSON part, as in PayPal's Disputes API guide; PayPal parsed this format live on 2026-10-14. No documents yet.
+- **Tracking-type requests are refused in the app.** Live on 2026-10-14 an item-not-received inquiry asked for
+  `PROOF_OF_FULFILLMENT`, and PayPal refused a note (`EVIDENCE_TYPE_IS_NOT_ALLOWED`). A demo shop ships nothing, so it
+  has no tracking to give: the endpoint answers `409 evidence_needs_details` and the console says to respond in PayPal's
+  Resolution Center. The draft's value there is the record it assembles, not the submission.
 - **Matching:** the disputed transaction's `seller_transaction_id` is our capture ID; else `custom` is our order ID
   (we send it as `custom_id`). Unmatched disputes are stored without an order and get no draft.
 - **Sandbox state changes stay out of the app.** `require-evidence` and `escalate` exist only in

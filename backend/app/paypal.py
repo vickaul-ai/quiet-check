@@ -213,13 +213,16 @@ class PayPalClient:
     async def list_disputes(self, page_size: int = 10) -> dict:
         return await self.request("GET", f"/v1/customer/disputes?page_size={page_size}")
 
-    async def provide_evidence(self, dispute_id: str, notes: str, request_id: str) -> dict:
-        """Notes-only evidence (type OTHER, up to 2000 characters). PayPal takes this as
+    async def provide_evidence(
+        self, dispute_id: str, notes: str, request_id: str, evidence_type: str = "OTHER"
+    ) -> dict:
+        """Notes-only evidence of the type PayPal asked for (default OTHER; up to 2000
+        characters). Format confirmed live 2026-10-14 (PayPal parsed it). PayPal takes this as
         multipart/form-data with the JSON in a part named `input` (`application/json`), as in
         its Disputes API guide's sample; documents would be further file parts. PayPal accepts
         it only while the dispute is WAITING_FOR_SELLER_RESPONSE and shows a provide-evidence
         link. Returns PayPal's links."""
-        evidence = {"evidences": [{"evidence_type": "OTHER", "notes": notes}]}
+        evidence = {"evidences": [{"evidence_type": evidence_type, "notes": notes}]}
         return await self.request(
             "POST",
             f"/v1/customer/disputes/{dispute_id}/provide-evidence",

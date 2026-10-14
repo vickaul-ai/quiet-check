@@ -244,6 +244,36 @@ def test_submit_refused_when_paypal_isnt_asking_for_evidence(api, fake, model) -
     assert submit(api, dispute["dispute_id"]).status_code == 200
 
 
+def test_submit_sends_the_evidence_type_paypal_asked_for(api, fake, model) -> None:
+    order = captured_order(api, fake)
+    dispute = open_dispute(api, fake, model, order, requested_evidence="PROOF_OF_RECEIPT_COPY")
+    assert submit(api, dispute["dispute_id"], note="Our records.").status_code == 200
+    assert fake.evidence[dispute["dispute_id"]] == [
+        {"evidence_type": "PROOF_OF_RECEIPT_COPY", "notes": "Our records."}
+    ]
+
+
+def test_submit_refused_when_paypal_wants_tracking(api, fake, model) -> None:
+    # Live 2026-10-14: an item-not-received inquiry asked for PROOF_OF_FULFILLMENT, and PayPal
+    # refused a note with EVIDENCE_TYPE_IS_NOT_ALLOWED. We say so instead of calling PayPal.
+    order = captured_order(api, fake)
+    dispute = open_dispute(
+        api,
+        fake,
+        model,
+        order,
+        reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+        requested_evidence="PROOF_OF_FULFILLMENT",
+    )
+    response = submit(api, dispute["dispute_id"])
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "evidence_needs_details"
+    assert error["details"]["requested_evidence_type"] == "PROOF_OF_FULFILLMENT"
+    assert fake.calls("POST", "/provide-evidence") == []
+    assert dispute_row(api, dispute["dispute_id"]).submitted_at is None
+
+
 def test_submit_validation_and_unknown_dispute(api, fake, model) -> None:
     order = captured_order(api, fake)
     dispute_id = open_dispute(api, fake, model, order)["dispute_id"]

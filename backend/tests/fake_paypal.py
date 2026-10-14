@@ -66,6 +66,7 @@ class FakePayPal:
         status: str = "WAITING_FOR_SELLER_RESPONSE",
         buyer_email: str = "buyer@example.com",
         seller_transaction_id: str | None = None,
+        requested_evidence: str | None = None,
     ) -> dict:
         """A buyer opens a dispute on a captured payment. The transaction carries the buyer's
         name and email, as PayPal's does, so tests can check they never reach the model."""
@@ -96,6 +97,11 @@ class FakePayPal:
             "dispute_life_cycle_stage": "CHARGEBACK",
             "dispute_channel": "INTERNAL",
             "seller_response_due_date": _z(created + timedelta(days=10)),
+            "evidences": (
+                [{"evidence_type": requested_evidence, "source": "REQUESTED_FROM_SELLER"}]
+                if requested_evidence
+                else []
+            ),
         }
         return self.disputes[dispute_id]
 
@@ -266,6 +272,9 @@ class FakePayPal:
                 return _error(400, "INVALID_REQUEST", "INVALID_INPUT")
             if dispute["status"] != "WAITING_FOR_SELLER_RESPONSE":
                 return _error(422, "UNPROCESSABLE_ENTITY", "NOT_ALLOWED")
+            asked = [e["evidence_type"] for e in dispute["evidences"]]
+            if asked and any(e["evidence_type"] not in asked for e in evidences):
+                return _error(400, "INVALID_REQUEST", "EVIDENCE_TYPE_IS_NOT_ALLOWED")
             self.evidence.setdefault(dispute["dispute_id"], []).extend(evidences)
             dispute["status"] = "UNDER_REVIEW"
             return httpx.Response(200, json={"links": self.dispute_view(dispute)["links"][:1]})

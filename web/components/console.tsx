@@ -412,6 +412,8 @@ const DISPUTE_STATUS_TEXT: Record<string, string> = {
 
 const SUBMIT_ERRORS: Record<string, string> = {
   dispute_not_awaiting_evidence: "PayPal isn't asking for evidence on this dispute yet.",
+  evidence_needs_details:
+    "PayPal is asking for shipment tracking (or refund or return details), which a note can't provide. Respond in PayPal's Resolution Center.",
   validation_error: `The note must be 1 to ${MAX_EVIDENCE_NOTE} characters.`,
   paypal_error: "PayPal returned an error. Nothing was sent; try again in a minute.",
   not_found: "This dispute isn't in Quiet Check any more. Reload the console.",

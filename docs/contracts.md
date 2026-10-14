@@ -528,9 +528,13 @@ Request:
 `note` is 1-2000 characters after trimming (PayPal's limit); `actor` must be `"reviewer"`; any other field is
 `422 validation_error`. The backend first reads the dispute again (`GET /v1/customer/disputes/{id}`) and stores its
 status. Unless PayPal's status is `WAITING_FOR_SELLER_RESPONSE` and its HATEOAS links include `provide-evidence`, the call
-returns `409 dispute_not_awaiting_evidence` with `details.dispute_status` and sends nothing. Otherwise it calls
+returns `409 dispute_not_awaiting_evidence` with `details.dispute_status` and sends nothing. The evidence type is the
+one PayPal asked for (the newest `evidences[]` entry with `source: REQUESTED_FROM_SELLER`), else `OTHER`. If that type
+needs structured details a note can't give (`PROOF_OF_FULFILLMENT`, `PROOF_OF_REFUND`, `PROOF_OF_RETURN`), the call
+returns `409 evidence_needs_details` with `details.requested_evidence_type` and sends nothing. Otherwise it calls
 `POST /v1/customer/disputes/{id}/provide-evidence` as `multipart/form-data` with one part named `input`
-(`application/json`): `{"evidences": [{"evidence_type": "OTHER", "notes": "<note>"}]}`, and
+(`application/json`): `{"evidences": [{"evidence_type": "<type>", "notes": "<note>"}]}` (format confirmed live
+2026-10-14), and
 `PayPal-Request-Id: <dispute_id>:evidence`. Then it stores `submitted_note`, `submitted_at` and `submitted_by:
 "reviewer"`, writes `dispute.evidence_submitted` (payload `dispute_id`, `actor`, `dispute_status`), and reads the
 dispute once more for its new status (best effort).
@@ -815,6 +819,7 @@ Every non-2xx response uses this body:
 | 404 | `not_found` | Unknown order, check, authorisation, SKU or dispute |
 | 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions), or the order lacks the identifiers `/risk/check` needs |
 | 409 | `dispute_not_awaiting_evidence` | D8: PayPal isn't asking the seller for evidence on this dispute (`details.dispute_status`) |
+| 409 | `evidence_needs_details` | D8: PayPal asked for evidence a note can't give, such as shipment tracking (`details.requested_evidence_type`) |
 | 409 | `policy_mismatch` | `/merchant/decide` decision differs from the policy result |
 | 422 | `validation_error` | Missing, invalid or unexpected fields (e.g. `identifiers` sent to `/risk/check`); `details` names the fields |
 | 429 | `rate_limited` | Web chat routes only: over the per-visitor or global limit (D9) |
