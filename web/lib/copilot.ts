@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { BackendError, getOrder, resolveHold } from "./backend";
 import { REPO_DIR } from "./env";
+import { logOrder } from "./log";
 import type { OrderDetail } from "./types";
 
 export async function copilotPrompt(): Promise<string> {
@@ -72,17 +73,23 @@ const ActionInput = z.object({
 export function copilotTools(selectedOrderId: string) {
   async function act(action: "capture" | "void", orderId: string, note: string) {
     if (orderId !== selectedOrderId) {
+      logOrder(selectedOrderId, `copilot refused to ${action} another order`, "warn");
       return { error: `Only the order open in the console (${selectedOrderId}) can be resolved here.` };
     }
     try {
       const order = await getOrder(orderId);
       if (order.status !== "held" || !order.authorization_id) {
+        logOrder(orderId, `copilot refused to ${action}: order is ${order.status}`, "warn");
         return { error: `Order ${orderId} is ${order.status}; only a held order can be captured or voided.` };
       }
       const result = await resolveHold(action, order.authorization_id, note);
+      logOrder(orderId, `reviewer ${action} approved in the copilot (status ${result.status})`);
       return { order_id: result.order_id, status: result.status, capture_id: result.capture_id ?? null };
     } catch (err) {
-      if (err instanceof BackendError) return { error: `The ${action} failed (${err.code}): ${err.message}` };
+      if (err instanceof BackendError) {
+        logOrder(orderId, `reviewer ${action} failed (${err.status} ${err.code})`, "warn");
+        return { error: `The ${action} failed (${err.code}): ${err.message}` };
+      }
       throw err;
     }
   }

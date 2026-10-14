@@ -51,7 +51,17 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
   emails, rerun `cd backend && uv run python scripts/seed.py --digests` and update `MEMBER_DATA_HASHES` on the backend.
 - **Stuck orders** are rerun automatically after 2 minutes in `checking` (feed: `reason: sweep`).
 - **Smoke check / warm-up** (e.g. on recording day): `scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"`.
-  Paid instances don't sleep, so the times it prints are warm response times.
+  Paid instances don't sleep, so the times it prints are warm response times. With `BACKEND_API_TOKEN` in the
+  environment it also checks `/health/deep`.
+- **Hourly check (D10):** `.github/workflows/hosted-check.yml` runs the smoke check and the deep health check every
+  hour (repo secrets `HOSTED_BACKEND_URL`, `HOSTED_WEB_URL`, `BACKEND_API_TOKEN`). A failed run emails Vic (GitHub
+  notifications for failed workflows). To test the email: Actions > Hosted check > Run workflow with `force_fail`.
+- **Persona run (D10, Gate C):** `make e2e-hosted` drives Ana, Ben and Cy through the shop and the PayPal pop-up and
+  checks each order through the console (`ARGS="--persona ben --headed"` for one, `ARGS="--persona ana --count 5
+  --together"` for the concurrency measurement). Needs the buyers' passwords and the console password in `.env`
+  (`.env.example`).
+- **Finding one order in the logs:** search the order ID (`ord_…`) in each service's Logs tab; backend, web and
+  workflow lines all start `order <id>:` (the backend's check lines say `check <chk> for <ord>`).
 - **Logs:** each service's Logs tab. Members log `serving on 0.0.0.0:<port> as http://<their hostname>:<port>,
   initiators allowed: http://quietcheck-backend-…:8100`; the backend logs `AP3 initiator serving as …; members: …`.
   The console feed shows `risk_agent.started` with `runner: render_workflow` and the task run ID for each order.
@@ -69,4 +79,5 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 ## Shutting down (Nov 30, 2026)
 
 Delete the Blueprint's services and database in the Render dashboard (or suspend them), revoke the Render API key and
-the Anthropic key, and delete the hosted webhook in the PayPal dashboard.
+the Anthropic key, delete the hosted webhook in the PayPal dashboard, and disable the hourly check
+(`gh workflow disable hosted-check.yml`; it also skips itself after Nov 30).

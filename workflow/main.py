@@ -14,12 +14,17 @@ BACKEND_API_TOKEN. Start command: `python main.py`.
 """
 
 import asyncio
+import logging
 import os
 
 import httpx
 from render import Retry, TaskContext, Workflows
 
 app = Workflows()
+# Every line names the order ("order <id>: ..."), as the backend's and web's lines do, so one
+# Render log search shows an order's whole path (D10).
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("quietcheck.workflow")
 
 DECIDED = ("captured", "held", "blocked", "voided")
 POLL_SECONDS = 2
@@ -47,16 +52,22 @@ class BackendFailed(Exception):
 
 @app.task(timeout_seconds=180, retry=Retry(max_retries=3, wait_duration_ms=3000))
 async def run_risk_agent(ctx: TaskContext, order_id: str) -> dict:
+    logger.info("order %s: calling /merchant/process", order_id)
     async with backend() as client:
         response = await client.post("/merchant/process", json={"order_id": order_id})
     body = response.json() if response.content else {}
     code = body.get("error", {}).get("code", "error")
     if response.status_code in (404, 409, 422):
         # Unknown order, or not processable (e.g. PayPal hasn't approved it): retrying won't help.
+        logger.warning("order %s: not processable (%s %s)", order_id, response.status_code, code)
         return {"order_id": order_id, "error": code}
     if response.status_code >= 400:
         # 5xx (a member down, a PayPal error) is retried; 401 (a wrong token) fails visibly.
+        logger.warning(
+            "order %s: backend %s %s; failing the attempt", order_id, response.status_code, code
+        )
         raise BackendFailed(f"order {order_id}: {response.status_code} {code}")
+    logger.info("order %s: %s (%s)", order_id, body.get("status"), response.status_code)
     return {"order_id": order_id, "status": body.get("status"), "decision": body.get("decision")}
 
 
@@ -71,6 +82,7 @@ async def wait_for_decision(ctx: TaskContext, order_id: str) -> dict:
                 if status in DECIDED or status == "failed":
                     break
             await asyncio.sleep(POLL_SECONDS)
+    logger.info("order %s: waited for another run; status %s", order_id, status)
     return {"order_id": order_id, "status": status}
 
 

@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { approvalSecret, copilotPrompt, copilotTools } from "@/lib/copilot";
 import { chatErrorText, rateLimit } from "@/lib/limits";
+import { logOrder } from "@/lib/log";
 import { fastModel } from "@/lib/model";
 
 // The review copilot (D6). Capture and void run only after the reviewer presses Approve (AI SDK tool approval).
@@ -37,5 +38,10 @@ export async function POST(req: Request) {
     stopWhen: isStepCount(5),
   });
 
-  return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream, onError: chatErrorText }) });
+  const onError = (error: unknown) => {
+    const text = chatErrorText(error);
+    logOrder(order_id, `copilot error (${text.split(":")[0]})`, "warn");
+    return text;
+  };
+  return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream, onError }) });
 }

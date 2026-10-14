@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { BackendError, createOrder, getCatalog } from "./backend";
 import { REPO_DIR } from "./env";
+import { logOrder } from "./log";
 import type { CartLine, CheckoutResult, Product } from "./types";
 
 export const MAX_QUANTITY = 10; // contracts.md, create-order validation
@@ -71,6 +72,7 @@ export function shoppingTools({ cart, deviceId }: { cart: CartLine[]; deviceId: 
         try {
           const catalog = await getCatalog();
           const order = await createOrder(lines, deviceId);
+          logOrder(order.order_id, `created by the shopping agent (PayPal order ${order.paypal_order_id})`);
           const items = lines.map((l) => ({ ...l, name: catalog.find((p) => p.sku === l.sku)?.name ?? l.sku }));
           return { order_id: order.order_id, paypal_order_id: order.paypal_order_id, amount: order.amount, items };
         } catch (err) {

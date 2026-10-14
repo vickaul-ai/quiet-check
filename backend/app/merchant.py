@@ -296,9 +296,14 @@ async def process_order(app_state, order_id: str) -> dict | None:
         if stored is not None:  # a rerun after a failed PayPal call: no new rationale
             rationale, source = stored.rationale, "stored"
         else:
-            rationale, source = await write_rationale(app_state.settings, decision, check["hits"])
-    except BaseException:
+            rationale, source = await write_rationale(
+                app_state.settings, decision, check["hits"], order_id
+            )
+    except BaseException as exc:
         _set_status(engine, order_id, ("checking",), "failed")
+        logger.warning(
+            "order %s: run failed (%s)", order_id, getattr(exc, "code", type(exc).__name__)
+        )
         raise
     await decide_order(
         engine, app_state.paypal, order_id, decision, rationale, check["check_id"], source

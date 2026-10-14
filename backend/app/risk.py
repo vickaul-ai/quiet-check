@@ -224,6 +224,9 @@ async def run_risk_check(
     except ConsortiumError as exc:
         members = sorted({m for m, _f, _e in exc.failures})
         _fail_check(engine, check_row.id, order_id, "member_unavailable", members)
+        logger.warning(
+            "check %s for %s failed: member(s) %s unavailable", check_row.id, order_id, members
+        )
         raise APIError(
             502,
             "member_unavailable",

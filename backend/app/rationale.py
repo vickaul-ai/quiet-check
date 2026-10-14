@@ -85,17 +85,19 @@ def _text(response) -> str:
     return " ".join(text.split())[:MAX_CHARS]
 
 
-async def _ask(model, messages) -> str:
+async def _ask(model, messages, order_id: str) -> str:
     """One answer, asking a second time if the first reply has no text."""
     for attempt in (1, 2):
         text = _text(await model.ainvoke(messages))
         if text:
             return text
-        logger.warning("rationale model returned no text (attempt %d)", attempt)
+        logger.warning("order %s: rationale model returned no text (attempt %d)", order_id, attempt)
     return ""
 
 
-async def write_rationale(settings: Settings, decision: str, hits: list[dict]) -> tuple[str, str]:
+async def write_rationale(
+    settings: Settings, decision: str, hits: list[dict], order_id: str = "-"
+) -> tuple[str, str]:
     """(rationale, source), where source is "llm" or "template". Never raises."""
     summary = hit_summary(decision, hits)
     try:
@@ -104,10 +106,16 @@ async def write_rationale(settings: Settings, decision: str, hits: list[dict]) -
             ("system", PROMPT_PATH.read_text()),
             ("human", json.dumps(summary)),
         ]
-        text = await asyncio.wait_for(_ask(model, messages), timeout=settings.rationale_timeout_s)
+        text = await asyncio.wait_for(
+            _ask(model, messages, order_id), timeout=settings.rationale_timeout_s
+        )
         if text:
             return text, "llm"
-        logger.warning("rationale model gave no text twice; using the template")
+        logger.warning("order %s: rationale model gave no text twice; using the template", order_id)
     except Exception as exc:  # any model, network or timeout error: the decision still goes ahead
-        logger.warning("rationale model failed (%s); using the template", type(exc).__name__)
+        logger.warning(
+            "order %s: rationale model failed (%s); using the template",
+            order_id,
+            type(exc).__name__,
+        )
     return template_rationale(summary), "template"

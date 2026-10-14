@@ -1,0 +1,46 @@
+name: Hosted check
+
+# Hourly synthetic check of the hosted demo (D10): scripts/check_hosted.sh plus GET /health/deep.
+# A failed run emails whoever GitHub notifies for this workflow (Settings > Notifications >
+# Actions: "Only notify for failed workflows"). Hourly keeps the private repo inside its free
+# Actions minutes. Stops by itself after the services shut down (Nov 30, 2026); disable it then:
+# `gh workflow disable hosted-check.yml`.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_fail:
+        description: "Fail on purpose, to test the failure email"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Services still up?
+        id: window
+        run: |
+          if [[ "$(date -u +%F)" > "2026-11-30" ]]; then
+            echo "The hosted demo was shut down on 2026-11-30; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.window.outputs.skip != 'true'
+      - name: Smoke check and deep health
+        if: steps.window.outputs.skip != 'true'
+        env:
+          HOSTED_BACKEND_URL: ${{ secrets.HOSTED_BACKEND_URL }}
+          HOSTED_WEB_URL: ${{ secrets.HOSTED_WEB_URL }}
+          BACKEND_API_TOKEN: ${{ secrets.BACKEND_API_TOKEN }}
+        run: scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"
+      - name: Forced failure (manual test of the email)
+        if: inputs.force_fail
+        run: |
+          echo "Failing on purpose (force_fail)."
+          exit 1

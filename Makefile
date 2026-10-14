@@ -1,5 +1,5 @@
 .PHONY: install dev dev-backend dev-web dev-member-A dev-member-B dev-member-C check sandbox \
-	seed approve-orders test-live gate-a live-personas
+	seed approve-orders test-live gate-a live-personas e2e-hosted
 
 install:
 	cd backend && uv sync
@@ -42,3 +42,7 @@ gate-a:
 # D4 + D7 live acceptance: one order per persona, approved in the browser, decided by the webhook alone.
 live-personas:
 	cd backend && uv run python scripts/live_personas.py
+
+# D10 / Gate C: Ana, Ben and Cy through the hosted shop and PayPal pop-up. ARGS e.g. --persona ben --headed
+e2e-hosted:
+	uv run scripts/e2e_hosted.py $(ARGS)
