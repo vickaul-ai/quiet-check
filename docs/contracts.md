@@ -10,7 +10,7 @@ Any session that changes an interface updates this file in the same change and n
 | Backend (FastAPI) | 8000 | Routers: `/risk`, `/payments`, `/merchant`, `/webhooks` |
 | AP3 initiator (`ap3_initiator` PrivacyAgent, in the backend process) | 8100 | Started in the backend's lifespan. It serves the merchant's AgentCard so members can verify our signed intents |
 | Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it. Each answers only the initiator URLs on its allowlist (default `http://127.0.0.1:8100`; see "Member list files") |
-| Web (Next.js: storefront + console) | 3000 | Calls the backend only |
+| Web (Next.js: storefront + console) | 3000 | Its server code calls the backend at `BACKEND_URL`; the browser never does (ADR 0009). Storefront routes below |
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
   **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs.
@@ -43,14 +43,15 @@ complete this order"; anything else "Processing". The storefront polls `GET /mer
 ### `GET /catalog`: product catalogue (D3)
 
 The storefront and the shopping agent read the products from here. `backend/app/catalog.json` is the source of truth,
-one SKU per variant; `POST /payments/orders` prices from the same file. D5 adds images (new optional fields only).
+one SKU per variant; `POST /payments/orders` prices from the same file. Each item also has an optional `image`: a
+path served by the web app, e.g. `"/products/backpack-blue.svg"` (D5; colour variants of one product share an image).
 
 Response `200`:
 
 ```json
 {
   "items": [
-    {"sku": "backpack-blue-m", "name": "Trail Backpack, Blue, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}}
+    {"sku": "backpack-blue-m", "name": "Trail Backpack, Blue, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}, "image": "/products/backpack-blue.svg"}
   ]
 }
 ```
@@ -414,6 +415,22 @@ decided with Vic). The storefront polls this after a `202 checking`; it carries 
 rationale, so D9 can leave it public while the other read endpoints (which carry payer email, address and receipts)
 go behind auth. Unknown order: `404 not_found`.
 
+### Storefront routes (web, D5)
+
+The browser calls only these Next.js routes (ADR 0009); they call the backend server-side.
+
+| Route | Calls | Returns to the browser |
+| --- | --- | --- |
+| `POST /api/chat` | The shopping agent (`LLM_MODEL_FAST`) and its tools: `search_products` and `add_to_cart` read `GET /catalog`; `checkout` calls `POST /payments/orders` | An AI SDK UI message stream |
+| `POST /api/orders/{order_id}/process` | `POST /merchant/process` (PayPal `onApprove`) | `{order_id, status}` (`status` may be `checking`), or `{error: {code}}` with the backend's HTTP status |
+| `GET /api/orders/{order_id}/status` | `GET /merchant/orders/{order_id}/status` | `{order_id, status}`, or `{error: {code}}` |
+
+`/api/chat` takes `{messages, persona, cart}`: `persona` is a key from `backend/app/personas.json` (the route looks up
+its `device_id`; unknown keys get `422`), and `cart` is `[{sku, quantity}]` (up to 20 lines, quantity 1-10). The
+`checkout` tool's output is `{order_id, paypal_order_id, amount, items}`, or `{error}`; the page passes
+`paypal_order_id` to the PayPal JS SDK v6 (`presentationMode: "popup"`), then on approval calls the process route
+and polls the status route every 1.5 s, for up to 2 minutes, until `captured`, `held`, `blocked` or `voided`.
+
 ## Webhook events handled
 
 | Event | Action |
@@ -548,7 +565,8 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 
 | Variable | Used by | Default / example |
 | --- | --- | --- |
-| `PAYPAL_CLIENT_ID` | Backend; web (JS SDK) | Sandbox REST app client ID |
+| `PAYPAL_CLIENT_ID` | Backend; web (JS SDK) | Sandbox REST app client ID. Public: the web server hands it to the browser |
+| `BACKEND_URL` | Web (server only) | `http://127.0.0.1:8000` (D5) |
 | `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |
 | `PAYPAL_WEBHOOK_ID` | Backend (webhook verification) | From the dashboard webhook config |
 | `ANTHROPIC_API_KEY` | Backend; web | - |

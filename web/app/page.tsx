@@ -1,14 +1,28 @@
+import { connection } from "next/server";
+import { Suspense } from "react";
+
+import { Storefront } from "@/components/storefront";
+import { getCatalog } from "@/lib/backend";
+import { paypalClientId } from "@/lib/env";
+import { loadPersonas } from "@/lib/personas";
+
 export default function Home() {
   return (
-    <main className="mx-auto flex max-w-2xl flex-1 flex-col justify-center gap-4 p-8">
-      <h1 className="text-3xl font-semibold">Quiet Check</h1>
-      <p>
-        A merchant agent privately checks an AI-agent purchase against other merchants&apos; fraud
-        lists, then uses PayPal to capture, hold or decline the payment.
-      </p>
-      <p className="text-sm text-neutral-500">
-        Storefront arrives in D5 and the merchant console in D6.
-      </p>
-    </main>
+    <Suspense fallback={<p className="p-8 text-sm text-[var(--muted)]">Loading the shop…</p>}>
+      <Shop />
+    </Suspense>
   );
+}
+
+async function Shop() {
+  await connection(); // catalogue, personas and env are read per request
+  const [catalog, personas] = await Promise.all([getCatalog().catch(() => null), loadPersonas()]);
+  if (!catalog) {
+    return (
+      <p className="p-8 text-sm">
+        The shop backend isn&apos;t reachable. Start it with <code>make dev</code> (or set <code>BACKEND_URL</code>).
+      </p>
+    );
+  }
+  return <Storefront catalog={catalog} personas={personas} clientId={paypalClientId()} />;
 }

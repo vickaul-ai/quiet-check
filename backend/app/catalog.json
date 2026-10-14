@@ -1,9 +1,9 @@
 [
-  {"sku": "backpack-blue-s", "name": "Trail Backpack, Blue, Small", "unit_amount": {"currency_code": "USD", "value": "45.00"}},
-  {"sku": "backpack-blue-m", "name": "Trail Backpack, Blue, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}},
-  {"sku": "backpack-blue-l", "name": "Trail Backpack, Blue, Large", "unit_amount": {"currency_code": "USD", "value": "54.00"}},
-  {"sku": "backpack-black-m", "name": "Trail Backpack, Black, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}},
-  {"sku": "duffel-green", "name": "Weekender Duffel, Green", "unit_amount": {"currency_code": "USD", "value": "79.00"}},
-  {"sku": "bottle-steel", "name": "Steel Water Bottle", "unit_amount": {"currency_code": "USD", "value": "24.00"}},
-  {"sku": "cap-navy", "name": "Trail Cap, Navy", "unit_amount": {"currency_code": "USD", "value": "19.00"}}
+  {"sku": "backpack-blue-s", "name": "Trail Backpack, Blue, Small", "unit_amount": {"currency_code": "USD", "value": "45.00"}, "image": "/products/backpack-blue.svg"},
+  {"sku": "backpack-blue-m", "name": "Trail Backpack, Blue, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}, "image": "/products/backpack-blue.svg"},
+  {"sku": "backpack-blue-l", "name": "Trail Backpack, Blue, Large", "unit_amount": {"currency_code": "USD", "value": "54.00"}, "image": "/products/backpack-blue.svg"},
+  {"sku": "backpack-black-m", "name": "Trail Backpack, Black, Medium", "unit_amount": {"currency_code": "USD", "value": "49.00"}, "image": "/products/backpack-black.svg"},
+  {"sku": "duffel-green", "name": "Weekender Duffel, Green", "unit_amount": {"currency_code": "USD", "value": "79.00"}, "image": "/products/duffel-green.svg"},
+  {"sku": "bottle-steel", "name": "Steel Water Bottle", "unit_amount": {"currency_code": "USD", "value": "24.00"}, "image": "/products/bottle-steel.svg"},
+  {"sku": "cap-navy", "name": "Trail Cap, Navy", "unit_amount": {"currency_code": "USD", "value": "19.00"}, "image": "/products/cap-navy.svg"}
 ]

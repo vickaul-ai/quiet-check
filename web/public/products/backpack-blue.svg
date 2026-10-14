@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Trail backpack">
+  <rect width="400" height="400" fill="#eaf1fb"/>
+  <path d="M160 92c0-24 18-40 40-40s40 16 40 40" fill="none" stroke="#173a75" stroke-width="14" stroke-linecap="round"/>
+  <rect x="112" y="90" width="176" height="236" rx="44" fill="#2f6fd6"/>
+  <rect x="112" y="90" width="176" height="80" rx="40" fill="#173a75" opacity=".35"/>
+  <rect x="140" y="214" width="120" height="86" rx="18" fill="#173a75" opacity=".45"/>
+  <path d="M152 236h96" stroke="#f2c94c" stroke-width="6" stroke-linecap="round"/>
+  <rect x="190" y="150" width="20" height="40" rx="6" fill="#f2c94c"/>
+  <rect x="128" y="318" width="40" height="16" rx="6" fill="#173a75"/>
+  <rect x="232" y="318" width="40" height="16" rx="6" fill="#173a75"/>
+</svg>

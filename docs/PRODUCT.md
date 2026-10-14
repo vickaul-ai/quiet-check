@@ -21,7 +21,12 @@ file tracks what exists today.
   the storefront a status-only view, and feed the console's event log.
 - **Demo data (D7):** `make seed` writes three ~300-entry synthetic member lists with the personas seeded: Ana (clean),
   Ben (one email hit at Member B: hold), Cy (email and device at Members A and C: block).
-- No storefront or console yet (D5, D6). The web app shows a placeholder page.
+- **Storefront and shopping agent (D5):** a seven-product shop with a chat panel. Ask the agent ("buy the blue backpack
+  in medium") and it searches, adds to the cart and creates the PayPal order in one turn (about 5 s), then shows a
+  PayPal button; the buyer approves in the PayPal pop-up and sees "Paid", "Payment on hold for review" or "We couldn't
+  complete this order". Products can also be added by hand and checked out through the agent. A persona switcher
+  picks Ana, Ben or Cy (their device ID); the buyer logs in to PayPal as that persona's sandbox account.
+- No merchant console yet (D6).
 
 ## Roadmap
 

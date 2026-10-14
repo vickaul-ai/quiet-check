@@ -6,7 +6,7 @@ Interfaces are specified in [contracts.md](contracts.md); this file covers how t
 
 ## Stack
 
-Python 3.12 + FastAPI (uv), AP3 SDK (`ap3[a2a]` and `ap3-functions` 1.2.2, pinned), SQLAlchemy 2 Core (ADR 0005), Next.js 16 + React 19 + Tailwind 4 (pnpm), Vercel AI SDK and LangChain behind
+Python 3.12 + FastAPI (uv), AP3 SDK (`ap3[a2a]` and `ap3-functions` 1.2.2, pinned), SQLAlchemy 2 Core (ADR 0005), Next.js 16 + React 19 + Tailwind 4 (pnpm), Vercel AI SDK v7 (`ai`, `@ai-sdk/anthropic`, `@ai-sdk/react`) and LangChain behind
 a model swap layer, SQLite locally and Postgres on Render. Details and model choices are in [brief.md](brief.md).
 
 ## Architecture
@@ -69,6 +69,23 @@ and falls back to a template after any error or 10 s. Settings take a `rationale
 the persona seeds, fake PayPal, fake model). Tests without members use `tests/stored_checks.py`, which writes a
 completed check so the real `/merchant/process` skips PSI.
 
+## Storefront and shopping agent (D5)
+
+ADR 0009. `app/page.tsx` (a server component) reads `GET /catalog`, the personas and `PAYPAL_CLIENT_ID` per request and
+renders `components/storefront.tsx`: persona switcher, product grid with Add buttons, cart, and the chat panel
+(`useChat` from `@ai-sdk/react`). The cart is React state; each chat request sends `{persona, cart}` with the messages,
+and the page adopts the cart from each `add_to_cart` tool output and clears it after `checkout`. Switching persona
+remounts the shop, so chat and cart start fresh.
+
+`app/api/chat/route.ts` runs `streamText` (AI SDK v7) with `prompts/shopping_agent.md`, the model from `lib/model.ts`
+(the only place a provider is created) and the tools from `lib/agent.ts`, up to 6 steps. The tools close over the
+request's cart and the persona's device ID (looked up server-side in `backend/app/personas.json`).
+`components/paypal-checkout.tsx` loads the PayPal JS SDK v6 (sandbox `web-sdk/v6/core`), creates one SDK instance per
+page with the client ID and one one-time payment session per order, and starts it in `popup` mode with the agent's
+PayPal order ID. `onApprove` calls `/api/orders/{id}/process`, then polls `/status` until a final status and shows the
+buyer text from `lib/types.ts`. `lib/backend.ts` is the only code that calls the backend; `lib/env.ts` loads the
+repo-root `.env`. Product images are SVGs in `web/public/products/`.
+
 ## Key files
 
 | Path | Holds |
@@ -96,7 +113,12 @@ completed check so the real `/merchant/process` skips PSI.
 | `backend/scripts/scan_logs.py` | Fails if any list entry or test identifier appears in a test-run log |
 | `backend/var/` | Git-ignored: member lists and keys, initiator key, `test-run/` |
 | `backend/tests/` | pytest suite; `test_risk_check.py` runs the 20 seeded cases against 3 real member processes; `test_payments.py` and `test_webhooks.py` use the fake PayPal; `test_merchant.py` runs the personas against real members; `test_live_paypal.py` is opt-in (`-m live`) |
-| `web/app/` | Next.js App Router pages |
+| `web/app/page.tsx`, `web/components/storefront.tsx` | Storefront page (server) and its client UI: personas, products, cart, chat |
+| `web/components/paypal-checkout.tsx` | PayPal JS SDK v6 button, `onApprove` -> process -> status polling, buyer status |
+| `web/app/api/chat/route.ts`, `web/lib/agent.ts` | The shopping agent: `streamText` and its three tools |
+| `web/app/api/orders/[orderId]/{process,status}/route.ts` | Server proxies for `/merchant/process` and the status endpoint |
+| `web/lib/model.ts`, `env.ts`, `backend.ts`, `personas.ts`, `types.ts` | Model factory, root `.env` loading, backend client, persona loading, shared types and buyer text |
+| `web/public/products/` | Product SVGs (referenced by `catalog.json`'s `image`) |
 | `scripts/check_sandbox.py` | PayPal sandbox OAuth check (uv inline-script dependencies) |
 | `prompts/` | LLM prompts, one file per task |
 | `.github/workflows/ci.yml` | CI: ruff + pytest; eslint + type-check |
@@ -112,6 +134,9 @@ completed check so the real `/merchant/process` skips PSI.
   A member without its list file exits with a message; after reseeding, restart the members. Expose webhooks with `ngrok http 8000`, then set the sandbox webhook URL to
   `https://<ngrok-host>/webhooks/paypal`.
 - `web/AGENTS.md` is written by `next dev`; commit it as is.
+- Storefront (D5): `make dev`, open http://localhost:3000, pick a persona and ask "buy the blue backpack in medium".
+  Approve in the PayPal pop-up as that persona's sandbox buyer; log out at www.sandbox.paypal.com before switching
+  persona (the pop-up reuses the last login). With ngrok running, the webhook and `onApprove` race; either is fine.
 - Tests write every log, plus the synthetic lists, to `backend/var/test-run/`; `make check` and CI then run
   `scripts/scan_logs.py`, which fails if any list entry or test identifier appears in a log.
 - Demo-size timing: `cd backend && uv run pytest -m slow -s` (3 checks at ~300 entries per member).
@@ -134,5 +159,7 @@ commitment `data_hash`, a digest of the whole list, not an entry).
 - `/risk/check` has no authentication; keep it off the public surface or add auth in D9 (ADR 0006). The same goes for
   `/payments/*` authorise, capture and void: they enforce status guards, but `actor: "reviewer"` is caller-asserted, so
   anyone who can reach the backend can capture or void a held order. D9 adds auth for all of these (ADR 0007).
+- `/api/chat` on the web app is unauthenticated: anyone who can reach it spends model tokens and creates sandbox
+  orders. D9 should rate-limit it (ADR 0009).
 
 See the Risks table in the build plan; the code-level ones are AP3 SDK drift (D2 spike) and webhook delivery during the demo.

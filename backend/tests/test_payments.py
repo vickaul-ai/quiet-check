@@ -74,6 +74,7 @@ def test_catalog_lists_every_sku(api) -> None:
         "sku": "backpack-blue-m",
         "name": "Trail Backpack, Blue, Medium",
         "unit_amount": {"currency_code": "USD", "value": "49.00"},
+        "image": "/products/backpack-blue.svg",
     }
 
 

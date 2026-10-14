@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Steel water bottle">
+  <defs><linearGradient id="s" x1="0" x2="1"><stop offset="0" stop-color="#9aa4ad"/><stop offset=".45" stop-color="#e3e8ec"/><stop offset="1" stop-color="#7d8790"/></linearGradient></defs>
+  <rect width="400" height="400" fill="#f0f2f4"/>
+  <rect x="172" y="52" width="56" height="40" rx="10" fill="#33383d"/>
+  <path d="M178 92h44l18 46v196a22 22 0 0 1-22 22h-36a22 22 0 0 1-22-22V138z" fill="url(#s)"/>
+  <rect x="160" y="200" width="80" height="70" rx="6" fill="#33383d" opacity=".15"/>
+  <path d="M184 66h32" stroke="#5b6168" stroke-width="6" stroke-linecap="round"/>
+</svg>

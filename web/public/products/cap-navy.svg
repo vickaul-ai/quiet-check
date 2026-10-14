@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="Trail cap">
+  <rect width="400" height="400" fill="#eceef6"/>
+  <path d="M96 240c0-80 46-128 104-128s104 48 104 128z" fill="#1f2d5a"/>
+  <path d="M200 112v128M150 124c-14 30-20 72-20 116M250 124c14 30 20 72 20 116" stroke="#0f1838" stroke-width="4" opacity=".6"/>
+  <path d="M84 240h232c20 0 34 10 34 22s-14 18-34 18H120c-26 0-36-18-36-40z" fill="#16214a"/>
+  <circle cx="200" cy="110" r="10" fill="#0f1838"/>
+  <path d="M168 196l32-34 32 34" fill="none" stroke="#f2c94c" stroke-width="8" stroke-linejoin="round"/>
+</svg>
