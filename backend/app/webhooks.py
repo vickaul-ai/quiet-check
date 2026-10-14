@@ -16,9 +16,9 @@ from sqlalchemy.exc import IntegrityError
 from app.db import events, orders
 from app.errors import APIError
 from app.ids import new_id
-from app.merchant import process_in_background
 from app.payments import HONOR_PERIOD, get_paypal, parse_time
 from app.paypal import PayPalError
+from app.workflow import start_risk_agent
 
 logger = logging.getLogger("quietcheck.webhooks")
 
@@ -161,6 +161,6 @@ async def paypal_webhook(request: Request, background: BackgroundTasks) -> dict:
         raise APIError(400, "webhook_unverified", "Webhook signature verification failed.")
     logger.info("webhook %s %s for order %s", event_type, event["id"], order_id)
     if run_process and settings.process_on_approval:
-        # After commit and after the 200: the check takes ~3 s plus the model call.
-        background.add_task(process_in_background, request.app.state, order_id)
+        # After commit: a Render Workflows run when hosted, else after the 200 (app/workflow.py).
+        await start_risk_agent(request.app.state, order_id, background)
     return {"received": True}

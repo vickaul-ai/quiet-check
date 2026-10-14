@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 
 import { MAX_QUANTITY, shoppingPrompt, shoppingTools } from "@/lib/agent";
+import { chatErrorText, rateLimit } from "@/lib/limits";
 import { fastModel } from "@/lib/model";
 import { loadPersonas } from "@/lib/personas";
 
@@ -20,6 +21,8 @@ const Body = z.object({
 });
 
 export async function POST(req: Request) {
+  const limited = rateLimit(req, "chat");
+  if (limited) return limited;
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return Response.json({ error: { code: "validation_error", message: "Bad chat request." } }, { status: 422 });
@@ -39,5 +42,5 @@ export async function POST(req: Request) {
     stopWhen: isStepCount(6),
   });
 
-  return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream }) });
+  return createUIMessageStreamResponse({ stream: toUIMessageStream({ stream: result.stream, onError: chatErrorText }) });
 }

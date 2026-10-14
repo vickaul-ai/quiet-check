@@ -140,7 +140,8 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 
 ## External services
 
-- PayPal sandbox REST app, three sandbox buyer accounts (one per persona), and a webhook pointing at `/webhooks/paypal` (ngrok locally, Render later).
+- PayPal sandbox REST app, three sandbox buyer accounts (one per persona), and two webhooks on the same app pointing at `/webhooks/paypal`: ngrok for local runs, the Render backend for the hosted demo (D9).
+- Render: the Blueprint in `render.yaml` (backend, web, Members A-C, Postgres, the `quietcheck-risk` workflow); see [deploy-render.md](deploy-render.md) and ADR 0011.
 - Anthropic API.
 
 ## Runbook
@@ -155,6 +156,9 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 - Tests write every log, plus the synthetic lists, to `backend/var/test-run/`; `make check` and CI then run
   `scripts/scan_logs.py`, which fails if any list entry or test identifier appears in a log.
 - Demo-size timing: `cd backend && uv run pytest -m slow -s` (3 checks at ~300 entries per member).
+- Hosted (D9): `bash scripts/render_setup.sh` walks through the first deploy; `scripts/check_hosted.sh <backend> <web>`
+  smoke-checks it. Details in [deploy-render.md](deploy-render.md). Run the backend suite on Postgres with
+  `QC_TEST_POSTGRES_URL=postgresql://user@host:port/postgres uv run pytest` (CI does).
 - Live PayPal runs (ADR 0007): stop `make dev-backend`, run `ngrok http 8000` (sandbox webhook pointing at it), then
   `make approve-orders` (approve the printed links as a sandbox buyer), then `make test-live` (uses 2 saved orders:
   capture and void) or `make gate-a END=capture|void` (uses 1). `approve-orders` runs with `process_on_approval` off, so
@@ -171,10 +175,11 @@ commitment `data_hash`, a digest of the whole list, not an entry).
 
 ## Risks
 
-- `/risk/check` has no authentication; keep it off the public surface or add auth in D9 (ADR 0006). The same goes for
-  `/payments/*` authorise, capture and void: they enforce status guards, but `actor: "reviewer"` is caller-asserted, so
-  anyone who can reach the backend can capture or void a held order. D9 adds auth for all of these (ADR 0007).
-- `/api/chat` on the web app is unauthenticated: anyone who can reach it spends model tokens and creates sandbox
-  orders. D9 should rate-limit it (ADR 0009).
+- Locally, the backend, console and chats are open (no `BACKEND_API_TOKEN` or `CONSOLE_PASSWORD`). Hosted, the backend
+  needs the token on everything but the webhook, health and status routes, the console needs its password, and the
+  chats are rate-limited (D9, ADR 0011). `actor: "reviewer"` is still caller-asserted, so anyone with the token or the
+  console password can capture or void a held order; that is the intended reviewer.
+- The per-visitor chat limit trusts the first `X-Forwarded-For` entry; the global limit and the Anthropic spend limit
+  bound the cost.
 
 See the Risks table in the build plan; the code-level ones are AP3 SDK drift (D2 spike) and webhook delivery during the demo.

@@ -18,10 +18,12 @@ def load_personas() -> list[dict]:
     return json.loads(PERSONAS_PATH.read_text())
 
 
-def persona_emails_from_env() -> dict[str, str]:
-    """{persona key: email}. Raises ValueError naming any unset or repeated variable."""
-    emails = {p["key"]: os.environ.get(p["email_env"], "").strip() for p in load_personas()}
-    missing = [p["email_env"] for p in load_personas() if not emails[p["key"]]]
+def persona_emails_from_env(keys: list[str] | None = None) -> dict[str, str]:
+    """{persona key: email} for the given personas (default all). Raises ValueError naming
+    any unset or repeated variable."""
+    personas = [p for p in load_personas() if keys is None or p["key"] in keys]
+    emails = {p["key"]: os.environ.get(p["email_env"], "").strip() for p in personas}
+    missing = [p["email_env"] for p in personas if not emails[p["key"]]]
     if missing:
         raise ValueError(f"set {', '.join(missing)} in .env (the sandbox buyer emails)")
     if len({e.lower() for e in emails.values()}) != len(emails):

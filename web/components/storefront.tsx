@@ -3,10 +3,10 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { PayPalCheckout } from "@/components/paypal-checkout";
+import { chatErrorMessage } from "@/lib/chat-errors";
 import { buyerText, type CartLine, type CheckoutResult, type Persona, type Product } from "@/lib/types";
 
 const MAX_QUANTITY = 10;
@@ -26,9 +26,11 @@ export function Storefront({ catalog, personas, clientId }: Props) {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <PersonaSwitcher personas={personas} value={personaKey} onChange={setPersonaKey} />
-          <Link href="/console" className="text-sm underline underline-offset-4">
+          {/* A full page load, so the browser asks for the console password (D9); a client-side
+              navigation or prefetch would only get the 401. */}
+          <a href="/console" className="text-sm underline underline-offset-4">
             Merchant console
-          </Link>
+          </a>
         </div>
       </header>
       {persona && (
@@ -165,7 +167,7 @@ function Shop({ catalog, personaKey, clientId }: { catalog: Product[]; personaKe
             <Message key={m.id} message={m} clientId={clientId} />
           ))}
           {status === "submitted" && <p className="text-sm text-[var(--muted)]">Thinking…</p>}
-          {error && <p className="text-sm text-[var(--bad)]">The agent hit an error. Please try again.</p>}
+          {error && <p className="text-sm text-[var(--bad)]">{chatErrorMessage(error, "The agent")}</p>}
         </div>
         <form
           className="flex gap-2 border-t border-[var(--line)] p-2"

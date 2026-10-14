@@ -410,7 +410,7 @@ function WhoSawWhat({ rows }: { rows: Detail["who_saw_what"] }) {
 
 function eventDetail(e: ConsoleEvent): string {
   const p = e.payload ?? {};
-  const keys = ["summary", "decision", "hit_count", "actor", "note", "capture_id", "capture_status", "authorization_status", "action", "issue", "error"];
+  const keys = ["summary", "runner", "task_run_id", "decision", "hit_count", "actor", "note", "capture_id", "capture_status", "authorization_status", "action", "issue", "error"];
   return keys
     .filter((k) => p[k] !== undefined && p[k] !== null && p[k] !== "")
     .map((k) => `${k}: ${String(p[k])}`)

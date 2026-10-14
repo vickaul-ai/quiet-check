@@ -1,5 +1,6 @@
 """Keys, list files and commitments shared by members and the initiator."""
 
+import base64
 import hashlib
 import json
 import os
@@ -9,8 +10,31 @@ from pathlib import Path
 
 from ap3.signing.primitives import generate_keypair
 from ap3.types import CommitmentMetadata, DataFormat, DataFreshness, DataStructure, Industry
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 _HASH_LINE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def keypair_from_seed(seed: str) -> tuple[bytes, bytes]:
+    """Ed25519 (private, public) key bytes from a 32-byte private key given as base64 or hex.
+
+    Hosted services keep their AP3 keys in an env var (D9) because their disks are wiped on
+    every deploy. A Render `generateValue` secret is base64 of 32 random bytes.
+    """
+    seed = seed.strip()
+    try:
+        raw = bytes.fromhex(seed) if len(seed) == 64 else base64.b64decode(seed, validate=True)
+    except ValueError:
+        raise ValueError("AP3 private key must be 32 bytes as base64 or hex") from None
+    if len(raw) != 32:
+        raise ValueError("AP3 private key must be 32 bytes as base64 or hex")
+    key = Ed25519PrivateKey.from_private_bytes(raw)
+    return raw, key.public_key().public_bytes_raw()
+
+
+def load_keypair(path: Path, seed: str | None = None) -> tuple[bytes, bytes]:
+    """The key from `seed` (an env var's value) if set, otherwise from `path` (created once)."""
+    return keypair_from_seed(seed) if seed else load_or_create_keypair(path)
 
 
 def load_or_create_keypair(path: Path) -> tuple[bytes, bytes]:

@@ -4,7 +4,8 @@ import type { ConsoleEvent } from "@/lib/types";
 // Webhook payloads hold the full PayPal resource (payer email, address), so only these keys reach the browser.
 const PAYLOAD_KEYS = [
   "summary", "decision", "hit_count", "verified", "check_id", "rationale_source", "paypal_action", "actor", "note", "capture_id",
-  "capture_status", "authorization_id", "authorization_status", "action", "name", "debug_id", "issue", "error",
+  "capture_status", "authorization_id", "authorization_status", "action", "name", "debug_id", "issue", "error", "runner",
+  "task_run_id",
 ];
 
 function slim(e: ConsoleEvent): ConsoleEvent {

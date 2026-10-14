@@ -11,6 +11,18 @@ Any session that changes an interface updates this file in the same change and n
 | AP3 initiator (`ap3_initiator` PrivacyAgent, in the backend process) | 8100 | Started in the backend's lifespan. It serves the merchant's AgentCard so members can verify our signed intents |
 | Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it. Each answers only the initiator URLs on its allowlist (default `http://127.0.0.1:8100`; see "Member list files") |
 | Web (Next.js: storefront + console) | 3000 | Its server code calls the backend at `BACKEND_URL`; the browser never does (ADR 0009). Storefront and console routes below |
+| Risk workflow (Render Workflows, `workflow/main.py`) | - | Hosted only (D9, ADR 0011): one task run per approved order calls `POST /merchant/process` over the private network |
+
+**Hosted on Render (D9, ADR 0011; `render.yaml`):** backend and web are public web services; Members A-C are private
+services; Postgres and the workflow are private. All share region `oregon`. Services find each other by internal
+hostname (`fromService ... host` in the Blueprint): the web and workflow reach the backend at `http://<host>:10000`,
+the initiator listens on `0.0.0.0:8100` with card URL `http://$RENDER_SERVICE_NAME:8100`, and each member listens on
+its usual port with card URL `http://$RENDER_SERVICE_NAME:<port>`, which must equal the backend's `MEMBER_<M>_URL`.
+
+**Backend auth (D9):** when `BACKEND_API_TOKEN` is set (always on Render; the backend refuses to start there
+without it), every route needs `Authorization: Bearer <token>` except `GET /health`, `POST /webhooks/paypal`
+(verified by signature) and `GET /merchant/orders/{order_id}/status`. Otherwise `401 unauthorized`. The web
+server and the workflow send the token; the browser never sees it. Unset locally and in tests.
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
   **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs.
@@ -255,9 +267,27 @@ replacing that check's receipts. On a member failure the `502 member_unavailable
 Each successful or failed check also writes a `system` event: `check.completed` (payload `check_id`, `hit_count`,
 `verified`) or `check.failed` (payload `check_id`, `error`, `members`).
 
+### `POST /merchant/start`: start the risk agent (D9)
+
+Called by the storefront's `onApprove` (through `POST /api/orders/{order_id}/process`). Request `{"order_id"}`. An order
+already `captured`, `held`, `blocked` or `voided` returns `200 {order_id, status}` and starts nothing. Otherwise it
+returns `202 {order_id, status}` with the current status at once. Unless the order is `checking`, it reads the PayPal
+order (storing the payer details, as `/merchant/process` does; a PayPal failure is `502 paypal_error`) and, only if
+PayPal reports `APPROVED` (or `COMPLETED`), starts the risk agent, so a premature call can't use up the order's task
+run: with `RENDER_API_KEY` and the workflow task set, a Render Workflows task run (`POST
+https://api.render.com/v1/task-runs`, task `<RISK_WORKFLOW_SLUG>/process_order`, input `[order_id]`, idempotency key
+the order ID, or a fresh key for a `failed` order); if that call fails, or locally, in the backend process after the
+response. Either way it writes a `risk_agent.started` event (payload `runner`: `render_workflow` with `task_run_id`,
+or `in_process`). Unknown order: `404 not_found`. The `CHECKOUT.ORDER.APPROVED` webhook starts the risk agent the
+same way, so with both triggers one task run serves the order.
+
+The task (`process_order`) calls `/merchant/process` (subtask `run_risk_agent`, up to 3 retries on a 5xx or 401; a
+404, 409 or 422 ends the run) and, on a `202`, polls the status endpoint (subtask `wait_for_decision`, up to 90 s).
+
 ### `POST /merchant/process`: run the risk agent on an approved order
 
-Called by the storefront's `onApprove` and by the `CHECKOUT.ORDER.APPROVED` webhook handler, whichever comes first. The
+Called by the risk workflow's task run (hosted) or in-process by `/merchant/start` and the `CHECKOUT.ORDER.APPROVED`
+webhook handler (D9; before D9 the storefront called it directly). Two runs can race; the first claims the order. The
 flow: read the order from PayPal and store its payer email and shipping address on our order, call `/risk/check`
 (which uses those and the stored `device_id`), apply
 the policy, have `LLM_MODEL_FAST` write the rationale, then call `/merchant/decide`.
@@ -296,8 +326,9 @@ Details (D4):
 - The model sees only the hit summary: decision, PayPal action, hit count, which member matched which field, and which
   fields were clear everywhere. Never identifiers, hashes, list contents or other buyers' data. Prompt:
   `prompts/risk_rationale.md`.
-- The webhook trigger runs after the webhook's `200` (in the background) and only when the event moved the order from
-  `created` to `approved`. Its errors are logged and leave the order `failed` for a rerun.
+- The webhook trigger runs only when the event moved the order from `created` to `approved`, and starts the risk agent
+  as `/merchant/start` does (a task run hosted, else in the background after the `200`). Its errors are logged and
+  leave the order `failed` for a rerun.
 
 ### `POST /merchant/decide`: record and execute a decision
 
@@ -422,7 +453,7 @@ The browser calls only these Next.js routes (ADR 0009); they call the backend se
 | Route | Calls | Returns to the browser |
 | --- | --- | --- |
 | `POST /api/chat` | The shopping agent (`LLM_MODEL_FAST`) and its tools: `search_products` and `add_to_cart` read `GET /catalog`; `checkout` calls `POST /payments/orders` | An AI SDK UI message stream |
-| `POST /api/orders/{order_id}/process` | `POST /merchant/process` (PayPal `onApprove`) | `{order_id, status}` (`status` may be `checking`), or `{error: {code}}` with the backend's HTTP status |
+| `POST /api/orders/{order_id}/process` | `POST /merchant/start` (PayPal `onApprove`; D9, before that `/merchant/process`) | `{order_id, status}` (usually not final yet), or `{error: {code}}` with the backend's HTTP status |
 | `GET /api/orders/{order_id}/status` | `GET /merchant/orders/{order_id}/status` | `{order_id, status}`, or `{error: {code}}` |
 
 `/api/chat` takes `{messages, persona, cart}`: `persona` is a key from `backend/app/personas.json` (the route looks up
@@ -433,11 +464,23 @@ and polls the status route every 1.5 s, for up to 2 minutes, until `captured`, `
 
 ### Console routes (web, D6)
 
-The merchant console lives at `/console` in the same app, linked from the shop header; no gate until D9 (ADR 0010).
+The merchant console lives at `/console` in the same app, linked from the shop header (ADR 0010). From D9, `/console`,
+`/console/*` and `/api/console/*` need HTTP Basic auth with any username and the password `CONSOLE_PASSWORD`
+(`web/proxy.ts`); otherwise `401` with a `WWW-Authenticate` challenge. With no `CONSOLE_PASSWORD`, `next dev` leaves
+the console open and production answers `503`. The shop stays public.
+
+**Chat rate limits (D9, `web/lib/limits.ts`):** `POST /api/chat` and `POST /api/console/chat` each allow 20 requests
+per visitor (first `X-Forwarded-For` address) per 10 minutes, and 600 requests per 24 hours across both routes and all
+visitors, in memory on the one web instance. Over a limit: `429 {"error": {"code": "rate_limited", ...}}` with
+`Retry-After`, and the chat panel says so. A model error mid-stream sends the error text `ai_unavailable: ...` when it
+looks like a spent budget or provider rate limit (the panel explains), else `chat_error`. The hosted model budget is a
+$10 spend limit on the Anthropic key's workspace (decided with Vic).
+
 The browser calls only these routes. Payer email and shipping address never leave the Next.js server: the detail route
 drops them, and the events route passes only these payload keys: `summary`, `decision`, `hit_count`, `verified`,
 `check_id`, `rationale_source`, `paypal_action`, `actor`, `note`, `capture_id`, `capture_status`, `authorization_id`,
-`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error` (PayPal webhook payloads hold the payer).
+`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error`, `runner`, `task_run_id` (PayPal webhook
+payloads hold the payer).
 
 | Route | Calls | Returns to the browser |
 | --- | --- | --- |
@@ -460,7 +503,7 @@ newest on load) and refreshes the table and open order when any event arrives; t
 
 | Event | Action |
 | --- | --- |
-| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and run `/merchant/process` after the `200` (D4) |
+| `CHECKOUT.ORDER.APPROVED` | Find the order by `resource.id` (the PayPal order ID). If it's `created`, set it to `approved` and start the risk agent (D4; a Render Workflows task run when hosted, D9) |
 | `PAYMENT.AUTHORIZATION.CREATED` | Record `authorization_id`, `expires_at` and `honor_period_ends_at` if missing. No status change |
 | `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set a `held` order to `voided` |
 | `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` if missing and set a `checking` or `held` order to `captured` |
@@ -541,7 +584,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text PK | `evt_...` (ULIDs sort by time) |
-| `source` | text | `paypal_webhook` or `system` (our own actions: `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`, `decision.made`) |
+| `source` | text | `paypal_webhook` or `system` (our own actions: `risk_agent.started`, `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`, `decision.made`) |
 | `paypal_event_id` | text unique null | Deduplicates webhook deliveries |
 | `event_type` | text | e.g. `PAYMENT.CAPTURE.COMPLETED`, `decision.made` |
 | `order_id` | text null FK -> orders | |
@@ -568,11 +611,15 @@ Hash: `sha256("<field>:" + normalised_value)`, as lowercase hex, where `<field>`
 fields mixed. Next to it, `key.json` holds the member's Ed25519 keypair as hex; the member creates it on first start and
 keeps it. The member reads its list once at startup, refuses to start if the file is missing or empty, and publishes
 `sha256` of the sorted list as its commitment's `data_hash`. The initiator's key lives in `backend/var/initiator/key.json`
-so stored receipts can be re-verified after a restart. All of `backend/var/` is git-ignored.
+so stored receipts can be re-verified after a restart. All of `backend/var/` is git-ignored. Hosted (D9), disks are wiped
+on every deploy, so keys come from env vars instead: `INITIATOR_PRIVATE_KEY` and each member's `MEMBER_PRIVATE_KEY`, a
+32-byte Ed25519 private key as base64 (a Render `generateValue` secret) or hex; and each member seeds its own list at
+start with `scripts/seed.py --member <M>`, which needs only the emails seeded on that list (A and C: Cy's; B: Ben's) and
+writes the same bytes as `make seed`.
 
 **Initiator allowlist** (ADR 0006): a member answers only initiators whose URL (the first entry of the intent's
 `participants`, compared after the SDK's `normalize_url`) is on its allowlist, set with `--initiator-url` (repeatable;
-default `http://127.0.0.1:8100`). Anything else gets an AP3 error envelope with `error_code: "INITIATOR_NOT_ALLOWED"`,
+default `$INITIATOR_URL`, else `http://$INITIATOR_HOST:8100`, else `http://127.0.0.1:8100`). Anything else gets an AP3 error envelope with `error_code: "INITIATOR_NOT_ALLOWED"`,
 before the member fetches any URL, and the backend reports `502 member_unavailable`.
 
 Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
@@ -591,7 +638,18 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | Variable | Used by | Default / example |
 | --- | --- | --- |
 | `PAYPAL_CLIENT_ID` | Backend; web (JS SDK) | Sandbox REST app client ID. Public: the web server hands it to the browser |
-| `BACKEND_URL` | Web (server only) | `http://127.0.0.1:8000` (D5) |
+| `BACKEND_URL` | Web (server only); workflow | `http://127.0.0.1:8000` (D5) |
+| `BACKEND_HOST` | Web (server only); workflow | Hosted (D9): the backend's internal hostname from the Blueprint; used as `http://<host>:10000` when `BACKEND_URL` is unset |
+| `BACKEND_API_TOKEN` | Backend; web (server only); workflow | Hosted (D9): the backend's bearer token (Blueprint `generateValue`, shared with `fromService ... envVarKey`). Unset locally: no auth |
+| `CONSOLE_PASSWORD` | Web (server only) | Hosted (D9): the console's shared password (HTTP Basic, any username). Unset: console open in `next dev`, `503` in production |
+| `RENDER_API_KEY` | Backend | Hosted (D9): starts the risk workflow's task runs. Unset: the risk agent runs in-process |
+| `RISK_WORKFLOW_SLUG`, `RISK_WORKFLOW_TASK` | Backend | Hosted (D9): the workflow's slug (Blueprint `property: slug`; the task is `<slug>/process_order`), or the full task ID |
+| `INITIATOR_PRIVATE_KEY`, `MEMBER_PRIVATE_KEY` | Backend; each member | Hosted (D9): AP3 Ed25519 keys (32 bytes, base64 or hex). Unset: the key files under `backend/var/` |
+| `MEMBER_A_HOST`, `MEMBER_B_HOST`, `MEMBER_C_HOST` (or `MEMBER_<M>_URL`) | Backend | Hosted (D9): each member's internal hostname (URL `http://<host>:8101` etc.), or a full URL. Default `http://127.0.0.1:810x` |
+| `INITIATOR_HOST` (or `INITIATOR_URL`) | Each member | Hosted (D9): the backend's internal hostname; the member allows only `http://<host>:8100` |
+| `INITIATOR_URL`, `INITIATOR_BIND`, `INITIATOR_PORT` | Backend | The initiator's card URL (default on Render `http://$RENDER_SERVICE_NAME:8100`, else `http://127.0.0.1:8100`), listen address (Render `0.0.0.0`, else `127.0.0.1`) and port (`8100`) |
+| `MEMBER_CARD_URL` | Each member | Override for the member's card URL (default on Render `http://$RENDER_SERVICE_NAME:<port>`) |
+| `QC_TEST_POSTGRES_URL` | Backend tests | Optional: run the suite on Postgres, one fresh database per test app (CI does, D9) |
 | `TOOL_APPROVAL_SECRET` | Web (server only) | Optional (D6): HMAC key that signs the copilot's approval requests. Unset: a random per-process key, fine for one local server; set it (`openssl rand -base64 32`) once the web app runs on more than one instance |
 | `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |
 | `PAYPAL_WEBHOOK_ID` | Backend (webhook verification) | From the dashboard webhook config |
@@ -601,9 +659,10 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `LLM_MODEL_SMART` | Dispute drafts (D8) | `claude-sonnet-5-5` |
 | `DATABASE_URL` | Backend | `sqlite:///./quietcheck.db` locally; Render Postgres URL when hosted |
 | `MEMBER_DATA_DIR` | Members; `scripts/seed.py` | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
-| `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py` | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
+| `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py`; hosted members (D9: A and C get Cy's, B gets Ben's) | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
 
-Later deliverables that add a variable (for example, member URLs for Render in D9) list it here and in `.env.example`.
+Later deliverables that add a variable list it here and in `.env.example`. Render also sets `RENDER=true` and
+`RENDER_SERVICE_NAME` on every service; the code reads both (D9).
 
 ## Errors
 
@@ -617,10 +676,12 @@ Every non-2xx response uses this body:
 | --- | --- | --- |
 | 400 | `bad_request` | Malformed JSON or headers |
 | 400 | `webhook_unverified` | Webhook signature verification failed |
+| 401 | `unauthorized` | Hosted: a private backend route without the right `BACKEND_API_TOKEN` (D9) |
 | 404 | `not_found` | Unknown order, check, authorisation or SKU |
 | 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions), or the order lacks the identifiers `/risk/check` needs |
 | 409 | `policy_mismatch` | `/merchant/decide` decision differs from the policy result |
 | 422 | `validation_error` | Missing, invalid or unexpected fields (e.g. `identifiers` sent to `/risk/check`); `details` names the fields |
+| 429 | `rate_limited` | Web chat routes only: over the per-visitor or global limit (D9) |
 | 502 | `paypal_error` | PayPal returned an error; `details` holds PayPal's `name`, `debug_id` and `issue` |
 | 502 | `member_unavailable` | A consortium member didn't complete a PSI session; the check is marked `failed` |
 

@@ -61,14 +61,24 @@ def _person(rng: random.Random) -> dict:
     }
 
 
-def persona_seeds(emails: dict[str, str]) -> dict[str, list[str]]:
-    """{member: [hash, ...]} for the personas, per `seeded_on` in personas.json."""
-    seeds: dict[str, list[str]] = {m: [] for m in MEMBERS}
+def persona_seeds(emails: dict[str, str], members=MEMBERS) -> dict[str, list[str]]:
+    """{member: [hash, ...]} for the personas, per `seeded_on` in personas.json. Needs only the
+    emails of the personas whose email is seeded on these members (`emails_needed`)."""
+    seeds: dict[str, list[str]] = {m: [] for m in members}
     for persona in load_personas():
-        values = {"email": emails[persona["key"]], "device_id": persona["device_id"]}
         for member, fields in persona["seeded_on"].items():
-            seeds[member] += [identifier_hash(field, values[field]) for field in fields]
+            if member not in seeds:
+                continue
+            for field in fields:
+                value = persona["device_id"] if field == "device_id" else emails[persona["key"]]
+                seeds[member].append(identifier_hash(field, value))
     return seeds
+
+
+def emails_needed(member: str) -> list[str]:
+    """Keys of the personas whose email is on this member's list (D9: a hosted member gets
+    only those emails)."""
+    return [p["key"] for p in load_personas() if "email" in p["seeded_on"].get(member, [])]
 
 
 def synthetic_entries(member: str, count: int) -> list[str]:
@@ -85,14 +95,16 @@ def synthetic_entries(member: str, count: int) -> list[str]:
     return sorted(entries)
 
 
+def build_member_list(member: str, emails: dict[str, str]) -> list[str]:
+    """One member's list: synthetic entries plus its persona seeds, ENTRIES_PER_MEMBER in all."""
+    seeds = persona_seeds(emails, members=(member,))[member]
+    filler = synthetic_entries(member, ENTRIES_PER_MEMBER - len(seeds))
+    return sorted(set(filler) | set(seeds))
+
+
 def build_lists(emails: dict[str, str]) -> dict[str, list[str]]:
     """{member: sorted hashes}: synthetic entries plus persona seeds, ENTRIES_PER_MEMBER each."""
-    seeds = persona_seeds(emails)
-    lists = {}
-    for member in MEMBERS:
-        filler = synthetic_entries(member, ENTRIES_PER_MEMBER - len(seeds[member]))
-        lists[member] = sorted(set(filler) | set(seeds[member]))
-    return lists
+    return {member: build_member_list(member, emails) for member in MEMBERS}
 
 
 def unseeded_persona_hashes(emails: dict[str, str]) -> dict[str, set[str]]:

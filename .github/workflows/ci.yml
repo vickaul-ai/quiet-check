@@ -8,6 +8,15 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      # Render runs Postgres 18 (D9); the suite runs once on SQLite and once here.
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -18,9 +27,13 @@ jobs:
           working-directory: backend
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: uv run ruff check . ../workflow
+      - run: uv run ruff format --check . ../workflow
       - run: uv run pytest -q
+      - name: Tests on Postgres
+        run: uv run pytest -q
+        env:
+          QC_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
       - name: No list entries or identifiers in logs
         run: uv run python scripts/scan_logs.py
 

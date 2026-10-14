@@ -16,6 +16,7 @@ AgentCard, so a forged intent can't make the member request any other URL.
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,13 +27,21 @@ from ap3.a2a.wire import ProtocolEnvelope
 from ap3.types import DataStructure, PrivacyError
 from ap3_functions import PSIOperation
 
-from app.config import INITIATOR_PORT, MEMBER_PORTS, MEMBERS, member_data_dir
+from app.config import (
+    INITIATOR_PORT,
+    MEMBER_PORTS,
+    MEMBERS,
+    default_bind_host,
+    member_data_dir,
+    own_private_url,
+    private_url,
+)
 from app.consortium.common import (
     ListFileError,
     build_commitment,
     list_digest,
+    load_keypair,
     load_list,
-    load_or_create_keypair,
 )
 
 logger = logging.getLogger("quietcheck.member")
@@ -87,11 +96,13 @@ def build_member(
     data_dir: Path,
     host: str = "127.0.0.1",
     allowed_initiator_urls: list[str] | None = None,
+    card_url: str | None = None,
+    private_key: str | None = None,
 ) -> MemberAgent:
     folder = data_dir / member
     list_path = folder / "list.csv"
     rows = load_list(list_path)
-    private_key, public_key = load_or_create_keypair(folder / "key.json")
+    private_key, public_key = load_keypair(folder / "key.json", private_key)
     commitment = build_commitment(
         agent_id=f"member_{member.lower()}",
         structure=DataStructure.BLACKLIST,
@@ -104,7 +115,8 @@ def build_member(
         allowed_initiator_urls=allowed,
         name=f"Member {member}",
         description=f"Quiet Check consortium member {member}: abuse list (PSI receiver)",
-        card_url=f"http://{host}:{port}",
+        # Must equal the URL the initiator uses for this member (the SDK checks it).
+        card_url=card_url or f"http://{host}:{port}",
         port=port,
         host=host,
         role="ap3_receiver",
@@ -118,11 +130,12 @@ def build_member(
         allow_private_initiator_urls=True,
     )
     logger.info(
-        "Member %s: %d list entries, serving on %s:%d, initiators allowed: %s",
+        "Member %s: %d list entries, serving on %s:%d as %s, initiators allowed: %s",
         member,
         len(rows),
         host,
         port,
+        card_url or f"http://{host}:{port}",
         ", ".join(sorted(agent.allowed_initiators)),
     )
     return agent
@@ -137,7 +150,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run one Quiet Check consortium member.")
     parser.add_argument("member", choices=MEMBERS)
     parser.add_argument("--port", type=int, help="default: 8101 / 8102 / 8103 for A / B / C")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", help="listen address (default 127.0.0.1; 0.0.0.0 on Render)")
+    parser.add_argument(
+        "--card-url",
+        help="URL the initiator reaches this member at (default $MEMBER_CARD_URL; on Render "
+        "http://$RENDER_SERVICE_NAME:<port>; else http://<host>:<port>). It must equal the "
+        "backend's MEMBER_<M>_URL",
+    )
     parser.add_argument(
         "--data-dir", type=Path, help="default: $MEMBER_DATA_DIR or backend/var/members"
     )
@@ -145,20 +164,31 @@ def main() -> None:
         "--initiator-url",
         action="append",
         dest="initiator_urls",
-        help=f"initiator allowed to query this member (repeatable; {DEFAULT_INITIATOR_URL})",
+        help="initiator allowed to query this member (repeatable; default $INITIATOR_URL, "
+        f"or http://$INITIATOR_HOST:{INITIATOR_PORT}, or {DEFAULT_INITIATOR_URL})",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    port = args.port or MEMBER_PORTS[args.member]
+    # Hosted (D9): the Blueprint gives each member the backend's internal hostname.
+    initiator_host = os.environ.get("INITIATOR_HOST")
+    initiator_url = os.environ.get("INITIATOR_URL") or (
+        initiator_host and private_url(initiator_host, INITIATOR_PORT)
+    )
     try:
         agent = build_member(
             args.member,
-            port=args.port or MEMBER_PORTS[args.member],
+            port=port,
             data_dir=args.data_dir or member_data_dir(),
-            host=args.host,
-            allowed_initiator_urls=args.initiator_urls,
+            host=args.host or default_bind_host(),
+            allowed_initiator_urls=args.initiator_urls
+            or ([initiator_url] if initiator_url else None),
+            card_url=args.card_url or os.environ.get("MEMBER_CARD_URL") or own_private_url(port),
+            # Hosted (D9): the key comes from the env, since the disk is wiped on deploy.
+            private_key=os.environ.get("MEMBER_PRIVATE_KEY"),
         )
-    except ListFileError as exc:
-        # Never start with an empty list: every check would silently come back clean.
+    except (ListFileError, ValueError) as exc:
+        # Never start with a missing or empty list (every check would come back clean) or a bad key.
         sys.exit(f"Member {args.member}: {exc}")
     asyncio.run(serve(agent))
 

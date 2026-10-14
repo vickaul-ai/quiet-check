@@ -72,11 +72,28 @@ def consortium(run_dir: Path):
             proc.stop()
 
 
+def test_database_url(run_dir: Path, name: str) -> str:
+    """SQLite per test app, or with QC_TEST_POSTGRES_URL (e.g. postgresql://localhost/postgres)
+    a fresh Postgres database per test app, as on Render (D9)."""
+    base = os.environ.get("QC_TEST_POSTGRES_URL")
+    if not base:
+        return f"sqlite:///{run_dir / f'{name}.db'}"
+    import hashlib
+
+    import psycopg
+
+    db = "qc_test_" + hashlib.sha256(name.encode()).hexdigest()[:16]
+    with psycopg.connect(base, autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {db}")
+        conn.execute(f"CREATE DATABASE {db}")
+    return base.rsplit("/", 1)[0] + "/" + db
+
+
 def make_settings(
     run_dir: Path, name: str, member_urls: dict[str, str], initiator_port: int, **kw
 ) -> Settings:
     return Settings(
-        database_url=f"sqlite:///{run_dir / f'{name}.db'}",
+        database_url=test_database_url(run_dir, name),
         initiator_port=initiator_port,
         initiator_key_path=run_dir / "initiator" / "key.json",
         member_urls=member_urls,

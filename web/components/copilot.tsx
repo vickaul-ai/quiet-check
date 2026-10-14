@@ -4,6 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithApprovalResponses, type UIMessage } from "ai";
 import { useEffect, useRef, useState } from "react";
 
+import { chatErrorMessage } from "@/lib/chat-errors";
 import type { OrderRow } from "@/lib/types";
 
 type Props = { order: OrderRow; onResolved: () => void };
@@ -69,7 +70,7 @@ export function Copilot({ order, onResolved }: Props) {
           <Message key={m.id} message={m} order={order} onRespond={addToolApprovalResponse} />
         ))}
         {status === "submitted" && <p className="text-sm text-[var(--muted)]">Thinking…</p>}
-        {error && <p className="text-sm text-[var(--bad)]">The copilot hit an error. Please try again.</p>}
+        {error && <p className="text-sm text-[var(--bad)]">{chatErrorMessage(error, "The copilot")}</p>}
       </div>
       <form
         className="flex gap-2 border-t border-[var(--line)] p-2"

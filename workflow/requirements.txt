@@ -1,0 +1,3 @@
+# Render Workflows task runner (D9). Pinned; Render installs these with pip.
+render==1.2.0
+httpx==0.28.1

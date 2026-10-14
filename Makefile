@@ -19,7 +19,7 @@ dev-web:
 	cd web && pnpm dev --port 3000
 
 check:
-	cd backend && uv run ruff check . && uv run ruff format --check . && uv run pytest -q && uv run python scripts/scan_logs.py
+	cd backend && uv run ruff check . ../workflow && uv run ruff format --check . ../workflow && uv run pytest -q && uv run python scripts/scan_logs.py
 	cd web && pnpm lint && pnpm typecheck
 
 sandbox:

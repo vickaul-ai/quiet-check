@@ -5,6 +5,7 @@ import json
 from sqlalchemy import select
 
 from app.db import events, orders
+from app.payments import iso_z
 from tests.fake_paypal import webhook_event, webhook_headers
 from tests.stored_checks import store_check
 from tests.test_payments import ADDRESS, authorize, create, processed_order, rows
@@ -124,7 +125,7 @@ def test_authorization_created_fills_missing_fields_only(api, fake) -> None:
     assert send(api, webhook_event("PAYMENT.AUTHORIZATION.CREATED", resource)).status_code == 200
     row = order_row(api, order["order_id"])
     assert row.authorization_id == "AUTH-FROM-WEBHOOK"
-    assert row.honor_period_ends_at.isoformat().startswith("2026-10-23T14:03:11")
+    assert iso_z(row.honor_period_ends_at) == "2026-10-23T14:03:11Z"  # any DB time zone
     assert row.status == "created"  # no status change
 
     other = {**resource, "id": "AUTH-OTHER"}

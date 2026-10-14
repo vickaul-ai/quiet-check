@@ -1,0 +1,186 @@
+# Render Blueprint for the hosted demo (D9; docs/deploy-render.md walks through it).
+# Vic creates it from the Render dashboard (New > Blueprint); nothing here starts paid services
+# by itself. Cost: 5 Starter services ($7/month each) + Basic-256mb Postgres ($6/month) = about
+# $41/month, plus Render Workflows usage (billed per second while a task runs).
+#
+# Everything runs in one region so the private network connects it all: the web service and the
+# workflow call the backend, the backend's AP3 initiator (:8100) calls the members, and the
+# members call back to the initiator. Only the backend and web services are public.
+#
+# Plan names: `starter` is the legacy name of `0.5c-512mb` and `basic-256mb` of `0.1c-256mb`;
+# Render still accepts both (render.com/docs/compute-plans-update).
+
+databases:
+  - name: quietcheck-db
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "18"
+    ipAllowList: [] # private network only
+
+services:
+  # FastAPI backend: risk agent, AP3 initiator (private port 8100), PayPal, webhooks.
+  # Public only for PayPal's webhooks and the order-status endpoint; every other route needs
+  # BACKEND_API_TOKEN (backend/app/main.py).
+  - type: web
+    name: quietcheck-backend
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install uv==0.9.21 && cd backend && uv sync --frozen --no-dev
+    startCommand: cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["backend/**", "prompts/**"]
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: UV_PYTHON_DOWNLOADS # use Render's Python, which is there at runtime too
+        value: never
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quietcheck-db
+          property: connectionString
+      - key: BACKEND_API_TOKEN
+        generateValue: true
+      - key: INITIATOR_PRIVATE_KEY # AP3 signing key (the disk is wiped on every deploy)
+        generateValue: true
+      - key: MEMBER_A_HOST
+        fromService: { name: quietcheck-member-a, type: pserv, property: host }
+      - key: MEMBER_B_HOST
+        fromService: { name: quietcheck-member-b, type: pserv, property: host }
+      - key: MEMBER_C_HOST
+        fromService: { name: quietcheck-member-c, type: pserv, property: host }
+      - key: RISK_WORKFLOW_SLUG
+        fromService: { name: quietcheck-risk, type: workflow, property: slug }
+      - key: RENDER_API_KEY # starts the risk workflow's task runs
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID # the hosted webhook's ID (a second webhook on the same app)
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: LLM_MODEL_FAST
+        value: claude-haiku-5-5
+      - key: LLM_MODEL_SMART
+        value: claude-sonnet-5-5
+
+  # Next.js storefront and merchant console. /console and /api/console/* need CONSOLE_PASSWORD.
+  - type: web
+    name: quietcheck-web
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: cd web && npx --yes pnpm@10.26.2 install --frozen-lockfile && npx --yes pnpm@10.26.2 build
+    startCommand: cd web && node_modules/.bin/next start --port $PORT
+    healthCheckPath: /
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["web/**", "prompts/**", "backend/app/personas.json"]
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: BACKEND_HOST
+        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: BACKEND_API_TOKEN
+        fromService: { name: quietcheck-backend, type: web, envVarKey: BACKEND_API_TOKEN }
+      - key: TOOL_APPROVAL_SECRET
+        generateValue: true
+      - key: CONSOLE_PASSWORD # the shared console password judges get on Devpost
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: LLM_MODEL_FAST
+        value: claude-haiku-5-5
+
+  # Consortium members: private services. Each seeds its own list at start (deterministic, so
+  # its commitment's data_hash is stable) and keeps its key in MEMBER_PRIVATE_KEY.
+  - type: pserv
+    name: quietcheck-member-a
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install uv==0.9.21 && cd backend && uv sync --frozen --no-dev
+    startCommand: cd backend && .venv/bin/python scripts/seed.py --member A && .venv/bin/python -m app.consortium.member A
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["backend/**"]
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: UV_PYTHON_DOWNLOADS
+        value: never
+      - key: MEMBER_PRIVATE_KEY
+        generateValue: true
+      - key: INITIATOR_HOST # the only initiator this member answers
+        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: PERSONA_CY_EMAIL # Cy's sandbox buyer email, seeded on A
+        sync: false
+
+  - type: pserv
+    name: quietcheck-member-b
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install uv==0.9.21 && cd backend && uv sync --frozen --no-dev
+    startCommand: cd backend && .venv/bin/python scripts/seed.py --member B && .venv/bin/python -m app.consortium.member B
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["backend/**"]
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: UV_PYTHON_DOWNLOADS
+        value: never
+      - key: MEMBER_PRIVATE_KEY
+        generateValue: true
+      - key: INITIATOR_HOST
+        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: PERSONA_BEN_EMAIL # Ben's sandbox buyer email, seeded on B
+        sync: false
+
+  - type: pserv
+    name: quietcheck-member-c
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install uv==0.9.21 && cd backend && uv sync --frozen --no-dev
+    startCommand: cd backend && .venv/bin/python scripts/seed.py --member C && .venv/bin/python -m app.consortium.member C
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths: ["backend/**"]
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: UV_PYTHON_DOWNLOADS
+        value: never
+      - key: MEMBER_PRIVATE_KEY
+        generateValue: true
+      - key: INITIATOR_HOST
+        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: PERSONA_CY_EMAIL # Cy's sandbox buyer email, seeded on C
+        sync: false
+
+  # Render Workflows: one durable task run per approved order (workflow/main.py). The backend
+  # starts it from the PayPal webhook and the storefront's onApprove.
+  - type: workflow
+    name: quietcheck-risk
+    runtime: python
+    region: oregon
+    rootDir: workflow
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: BACKEND_HOST
+        fromService: { name: quietcheck-backend, type: web, property: host }
+      - key: BACKEND_API_TOKEN
+        fromService: { name: quietcheck-backend, type: web, envVarKey: BACKEND_API_TOKEN }

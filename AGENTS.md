@@ -1,6 +1,6 @@
 # Quiet Check
 
-_Last reviewed: 2026-10-14_
+_Last reviewed: 2026-10-14 (D9)_
 
 A merchant agent privately checks AI-agent purchases against other merchants' fraud lists with AP3 PSI, then captures,
 holds or declines the payment through PayPal Orders v2 (sandbox only).
@@ -21,4 +21,8 @@ holds or declines the payment through PayPal Orders v2 (sandbox only).
   owns status changes. Demo lists: `make seed`; persona emails live only in `.env`.
 - Web (ADRs 0009, 0010): storefront at `/`, merchant console and review copilot at `/console`. The browser never calls the backend; the Next.js server does, at `BACKEND_URL`, and reads the
   repo-root `.env`. Next.js 16 and AI SDK v7 differ from older docs; read the bundled docs in `node_modules` first.
+- Hosting (ADR 0011): Render Blueprint `render.yaml`, region oregon, created by Vic in the dashboard (no Render API key
+  here); guide `docs/deploy-render.md`, wizard `scripts/render_setup.sh`. Hosted-only env vars (token gate, console
+  password, AP3 keys, internal hostnames) are unset locally, which keeps local behaviour unchanged. The risk agent runs
+  as Render Workflows task `quietcheck-risk/process_order` (`workflow/`) when `RENDER_API_KEY` is set.
 - Docs: `docs/PRODUCT.md`, `docs/ENGINEERING.md`, ADRs in `docs/decisions/`.

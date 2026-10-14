@@ -23,7 +23,7 @@ from ap3.types import (
 )
 from ap3_functions import PSIOperation
 
-from app.consortium.common import build_commitment, load_or_create_keypair
+from app.consortium.common import build_commitment, load_keypair
 from app.identifiers import FIELDS
 
 logger = logging.getLogger("quietcheck.initiator")
@@ -92,15 +92,28 @@ def verify_receipt(
 
 
 class Initiator:
-    def __init__(self, *, port: int, key_path: Path, member_urls: dict[str, str]):
+    def __init__(
+        self,
+        *,
+        port: int,
+        key_path: Path,
+        member_urls: dict[str, str],
+        host: str = "127.0.0.1",
+        card_url: str = "",
+        private_key: str = "",
+    ):
+        """`card_url` is the URL members reach us at; it must be on their allowlist. Hosted, it
+        is the backend's private-network address and `host` is 0.0.0.0 (D9)."""
         self.member_urls = member_urls
-        self.private_key, self.public_key = load_or_create_keypair(key_path)
+        self.card_url = card_url or f"http://127.0.0.1:{port}"
+        self.private_key, self.public_key = load_keypair(key_path, private_key)
         self.peer_client = RecordingPeerClient()
         self.agent = PrivacyAgent(
             name="Quiet Check merchant risk",
             description="Merchant risk agent: PSI initiator against the consortium members",
-            card_url=f"http://127.0.0.1:{port}",
+            card_url=self.card_url,
             port=port,
+            host=host,
             role="ap3_initiator",
             operation=PSIOperation(),
             commitment=build_commitment("quietcheck_merchant", DataStructure.CUSTOMER_LIST, 1),
@@ -113,6 +126,11 @@ class Initiator:
     async def start(self) -> None:
         self._stack = contextlib.AsyncExitStack()
         await self._stack.enter_async_context(self.agent.serving())
+        logger.info(
+            "AP3 initiator serving as %s; members: %s",
+            self.card_url,
+            ", ".join(f"{m} {url}" for m, url in self.member_urls.items()),
+        )
 
     async def stop(self) -> None:
         if self._stack is not None:

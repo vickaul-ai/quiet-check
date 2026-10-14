@@ -1,6 +1,6 @@
 import "server-only";
 
-import { backendUrl } from "./env";
+import { backendToken, backendUrl } from "./env";
 import type { CartLine, ConsoleEvent, OrderDetail, OrderRow, Product } from "./types";
 
 // Server-side calls to the FastAPI backend (docs/contracts.md). Errors keep the contract's
@@ -18,7 +18,11 @@ export class BackendError extends Error {
 async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<{ status: number; data: T }> {
   const res = await fetch(`${backendUrl()}${path}`, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      // Hosted (D9): the backend's private routes need its API token.
+      ...(backendToken() ? { Authorization: `Bearer ${backendToken()}` } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
@@ -45,9 +49,10 @@ export async function createOrder(items: CartLine[], deviceId: string): Promise<
   return (await call<CreatedOrder>("POST", "/payments/orders", { items, device_id: deviceId })).data;
 }
 
-// `onApprove`: 200 with the final status, or 202 `checking` when the webhook got there first.
-export async function processOrder(orderId: string): Promise<string> {
-  return (await call<{ status: string }>("POST", "/merchant/process", { order_id: orderId })).data.status;
+// `onApprove`: starts the risk agent (a Render Workflows run when hosted, D9) and returns at once:
+// 200 with the final status if already decided, otherwise 202 with the current status.
+export async function startOrder(orderId: string): Promise<string> {
+  return (await call<{ status: string }>("POST", "/merchant/start", { order_id: orderId })).data.status;
 }
 
 export async function getOrderStatus(orderId: string): Promise<string> {
