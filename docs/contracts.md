@@ -26,7 +26,8 @@ without it), every route needs `Authorization: Bearer <token>` except `GET /heal
 server and the workflow send the token; the browser never sees it. Unset locally and in tests.
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
-  **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs.
+  **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs, and so do dispute paths (PayPal's
+  `dispute_id`, e.g. `PP-D-12345`; D8).
 - **Money:** `{"currency_code": "USD", "value": "49.00"}`. The value is a decimal string, as in PayPal. USD only.
 - **Times:** ISO 8601 UTC, e.g. `"2026-10-20T14:03:11Z"`.
 - **JSON:** snake_case, `Content-Type: application/json`.
@@ -444,13 +445,18 @@ Actions only follow allowed status transitions; anything else is stored only.
       "capture_id": null,
       "honor_period_ends_at": "2026-10-23T14:03:11Z",
       "device_id": "dev-ben-2c9d",
+      "dispute_status": null,
       "created_at": "2026-10-20T14:01:02Z"
     }
   ]
 }
 ```
 
-`GET /merchant/orders/{order_id}` returns the list fields plus `items`, `payer_email`, `shipping_address`,
+`dispute_status` (D8) is the PayPal status of the order's newest dispute (e.g. `WAITING_FOR_SELLER_RESPONSE`), or null
+when the order has none; the console marks such orders "disputed".
+
+`GET /merchant/orders/{order_id}` returns the list fields plus `items`, `payer_email`, `shipping_address`, `disputes`
+(D8, below),
 `check` (the `/risk/check` response, or null until a check completes), `receipts` (full rows, in the same order as
 `check.hits`: `receipt_id`, `check_id`, `member`, `field`, `is_match`, `session_id`, `intent_directives`,
 `result_directive`, `member_commitment`, `member_public_key`, `verified`, `created_at`), `decision` (the full row or
@@ -470,6 +476,34 @@ string) and `who_saw_what`:
 }
 ```
 
+`disputes` (D8) lists the order's PayPal disputes, newest first, with no payer data:
+
+```json
+{
+  "disputes": [
+    {
+      "dispute_id": "PP-D-27803",
+      "order_id": "ord_01JA...",
+      "reason": "UNAUTHORISED",
+      "status": "WAITING_FOR_SELLER_RESPONSE",
+      "amount": {"currency_code": "USD", "value": "49.00"},
+      "seller_response_due_date": "2026-10-30T14:03:11Z",
+      "draft_note": "To PayPal's dispute team: ...",
+      "draft_source": "llm",
+      "drafted_at": "2026-10-20T15:00:02Z",
+      "submitted_note": null,
+      "submitted_at": null,
+      "submitted_by": null,
+      "created_at": "2026-10-20T15:00:00Z",
+      "updated_at": "2026-10-20T15:00:02Z"
+    }
+  ]
+}
+```
+
+`draft_source` is `llm`, `template` (the model failed), `pending` (a draft is being written; `draft_note` is null
+meanwhile) or null (no draft: the dispute matched no order, or evidence was already submitted).
+
 `GET /merchant/events?after=evt_...` returns `{"events": [...]}`: up to 50 `events` rows after the given ID, oldest first,
 leaving out unverified webhook deliveries (stored, but anyone can post them; D9)
 (from the very first event without `after`). Each has `event_id`, `source`, `event_type`, `order_id`, `paypal_event_id`,
@@ -479,6 +513,31 @@ leaving out unverified webhook deliveries (stored, but anyone can post them; D9)
 decided with Vic). The storefront polls this after a `202 checking`; it carries no payer details, receipts or
 rationale, so D9 can leave it public while the other read endpoints (which carry payer email, address and receipts)
 go behind auth. Unknown order: `404 not_found`.
+
+### `POST /merchant/disputes/{dispute_id}/evidence`: submit dispute evidence (D8)
+
+Called only by the console's "Submit evidence to PayPal" button, after an in-page confirmation. The model drafts the
+note (see "Webhook events handled") and never calls this; the review copilot has no tool for it.
+
+Request:
+
+```json
+{"note": "To PayPal's dispute team: ...", "actor": "reviewer"}
+```
+
+`note` is 1-2000 characters after trimming (PayPal's limit); `actor` must be `"reviewer"`; any other field is
+`422 validation_error`. The backend first reads the dispute again (`GET /v1/customer/disputes/{id}`) and stores its
+status. Unless PayPal's status is `WAITING_FOR_SELLER_RESPONSE` and its HATEOAS links include `provide-evidence`, the call
+returns `409 dispute_not_awaiting_evidence` with `details.dispute_status` and sends nothing. Otherwise it calls
+`POST /v1/customer/disputes/{id}/provide-evidence` as `multipart/form-data` with one part named `input`
+(`application/json`): `{"evidences": [{"evidence_type": "OTHER", "notes": "<note>"}]}`, and
+`PayPal-Request-Id: <dispute_id>:evidence`. Then it stores `submitted_note`, `submitted_at` and `submitted_by:
+"reviewer"`, writes `dispute.evidence_submitted` (payload `dispute_id`, `actor`, `dispute_status`), and reads the
+dispute once more for its new status (best effort).
+
+Response `200`: the dispute object from the order detail's `disputes`. A repeat call after a submission returns the
+stored dispute without calling PayPal, whatever its note. Unknown dispute: `404 not_found`. A PayPal failure is
+`502 paypal_error` with a `paypal.error` event (`action` `get_dispute` or `provide_evidence`).
 
 ### Storefront routes (web, D5)
 
@@ -515,19 +574,21 @@ $10 spend limit on the Anthropic key's workspace (decided with Vic).
 The browser calls only these routes. Payer email and shipping address never leave the Next.js server: the detail route
 drops them, and the events route passes only these payload keys: `summary`, `decision`, `hit_count`, `verified`,
 `check_id`, `rationale_source`, `paypal_action`, `actor`, `note`, `capture_id`, `capture_status`, `authorization_id`,
-`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error`, `runner`, `reason`, `task_run_id` (PayPal webhook
-payloads hold the payer).
+`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error`, `runner`, `reason`, `task_run_id`, `dispute_id`,
+`draft_source`, `dispute_status` (PayPal webhook payloads hold the payer).
 
 | Route | Calls | Returns to the browser |
 | --- | --- | --- |
 | `GET /api/console/orders` | `GET /merchant/orders` | `{orders}` unchanged |
 | `GET /api/console/orders/{order_id}` | `GET /merchant/orders/{order_id}` | The detail without `payer_email` and `shipping_address` |
 | `GET /api/console/events?after=evt_...` | `GET /merchant/events` | `{events}` with payloads cut to the keys above; a malformed `after` is `422` |
+| `POST /api/console/disputes/{dispute_id}/evidence` | `POST /merchant/disputes/{dispute_id}/evidence` with `actor: "reviewer"` added (D8) | The dispute, or `{error: {code}}` with the backend's status. Takes `{note}` (1-2000 characters); a malformed dispute ID or note is `422` |
 | `POST /api/console/chat` | The review copilot (`LLM_MODEL_FAST`, `prompts/review_copilot.md`) and its tools | An AI SDK UI message stream |
 
 `/api/console/chat` takes `{messages, order_id}` (the order open in the console). Tools: `get_order` reads the detail
 and gives the model a summary (status, decision, rationale, which member matched which field, receipts verified,
-honour-period time left, resolution; no identifiers). `capture_held_payment` and `void_held_payment` take
+honour-period time left, resolution, and each dispute's reason, PayPal status, due date and whether a draft is ready
+or evidence was submitted (D8); no identifiers). `capture_held_payment` and `void_held_payment` take
 `{order_id, note}`, need AI SDK tool approval (`toolApproval: 'user-approval'`, signed with
 `experimental_toolApprovalSecret`), refuse any order other than the open one or one that isn't `held`, and then call
 `POST /payments/authorizations/{authorization_id}/capture` or `/void` with `{"actor": "reviewer", "note"}`. Their
@@ -543,11 +604,28 @@ newest on load) and refreshes the table and open order when any event arrives; t
 | `PAYMENT.AUTHORIZATION.CREATED` | Record `authorization_id`, `expires_at` and `honor_period_ends_at` if missing. No status change |
 | `PAYMENT.AUTHORIZATION.VOIDED` | Confirm the void: set a `held` order to `voided` |
 | `PAYMENT.CAPTURE.COMPLETED` | Confirm the capture: record `capture_id` if missing and set a `checking` or `held` order to `captured` |
-| `CUSTOMER.DISPUTE.CREATED` | Store only. D8 (stretch) drafts evidence with `LLM_MODEL_SMART`; a human submits it |
+| `CUSTOMER.DISPUTE.CREATED` | D8: after the `200`, read the dispute from PayPal, store it in `disputes` and draft evidence (below) |
+| `CUSTOMER.DISPUTE.UPDATED`, `CUSTOMER.DISPUTE.RESOLVED` | D8: the same; refreshes the dispute's status, and drafts only if no draft exists yet |
 
 Confirmed live in D3 (2026-10-13, sandbox, all signature-verified): `CHECKOUT.ORDER.APPROVED`,
 `PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.CAPTURE.COMPLETED` and `PAYMENT.AUTHORIZATION.VOIDED`. `CUSTOMER.DISPUTE.CREATED`
-is subscribed but hasn't been seen live (D8).
+is subscribed but hasn't been seen live (D8). `UPDATED` and `RESOLVED` need adding to the sandbox webhooks' event list
+for status refreshes; without them the console shows the status as of creation or the last submit.
+
+**Disputes (D8, `app/disputes.py`):** the event is stored with its order, found by the disputed transaction's
+`seller_transaction_id` (our `orders.capture_id`) or its `custom` (our order ID, sent as `custom_id`); `resource_id` is
+the `dispute_id`. Then, as a background task: `GET /v1/customer/disputes/{dispute_id}` (the webhook resource can be
+partial; if the read fails, the webhook resource is used), match the order again from that, and upsert the `disputes`
+row. A dispute that matches no order is stored with `order_id` null and gets no draft. A matched, unsubmitted dispute
+with no draft is claimed (`draft_source: "pending"`, one conditional update; a claim older than 5 minutes may be taken
+again) and drafted once: `LLM_MODEL_SMART` with `prompts/dispute_evidence.md` and a JSON fact sheet, 60 s timeout. The
+fact sheet holds the dispute (ID, reason, status, amount, due date), the order (items, amount, status, created,
+checked, decided, authorised and captured times, who captured), the PayPal order, authorisation and capture IDs, the
+decision and its rationale, which member matched which field, the receipts (IDs, AP3 session IDs, verified) and the
+order's signature-verified PayPal webhooks. It never holds the payer email, shipping address, device ID, buyer name,
+identifier hashes, list contents or reviewer notes. Any model error, timeout or empty reply gives a template note from
+the same facts. Notes are plain text, cut to at most 2000 characters at a sentence end. Event `dispute.drafted`
+(payload `dispute_id`, `reason`, `draft_source`). Errors are logged by name and never reach PayPal.
 
 ## Database tables
 
@@ -620,7 +698,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text PK | `evt_...` (ULIDs sort by time) |
-| `source` | text | `paypal_webhook` or `system` (our own actions: `risk_agent.started`, `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`, `decision.made`) |
+| `source` | text | `paypal_webhook` or `system` (our own actions: `risk_agent.started`, `check.completed`, `check.failed`, `order.created`, `payment.authorized`, `capture.requested`, `payment.captured`, `void.requested`, `payment.voided`, `paypal.error`, `decision.made`, and D8's `dispute.drafted` and `dispute.evidence_submitted`) |
 | `paypal_event_id` | text unique null | Deduplicates webhook deliveries |
 | `event_type` | text | e.g. `PAYMENT.CAPTURE.COMPLETED`, `decision.made` |
 | `order_id` | text null FK -> orders | |
@@ -628,6 +706,21 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | `verified` | boolean null | Webhooks only |
 | `payload` | json | Never contains list contents |
 | `created_at` | timestamp | |
+
+**`disputes`** (D8): one row per PayPal dispute.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text PK | PayPal's `dispute_id` |
+| `order_id` | text null FK -> orders | Null if the dispute matched none of our orders |
+| `reason`, `status` | text null | PayPal's, e.g. `UNAUTHORISED`, `WAITING_FOR_SELLER_RESPONSE` |
+| `amount_value`, `currency_code` | text null | PayPal's `dispute_amount` |
+| `seller_response_due_date` | timestamp null | |
+| `draft_note` | text null | The evidence draft (at most 2000 characters) |
+| `draft_source` | text null | `llm`, `template`, or `pending` while drafting |
+| `drafted_at` | timestamp null | |
+| `submitted_note`, `submitted_at`, `submitted_by` | text / timestamp / text null | What the reviewer sent; `submitted_by` is `reviewer` |
+| `created_at`, `updated_at` | timestamp | |
 
 ## Identifier normalisation
 
@@ -695,7 +788,7 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `ANTHROPIC_API_KEY` | Backend; web | - |
 | `LLM_PROVIDER` | Backend; web | `anthropic` |
 | `LLM_MODEL_FAST` | Shopping agent, rationale, copilot | `claude-haiku-5-5` |
-| `LLM_MODEL_SMART` | Dispute drafts (D8) | `claude-sonnet-5-5` |
+| `LLM_MODEL_SMART` | Backend: dispute evidence drafts (D8) | `claude-sonnet-5-5` |
 | `DATABASE_URL` | Backend | `sqlite:///./quietcheck.db` locally; Render Postgres URL when hosted |
 | `MEMBER_DATA_DIR` | Members; `scripts/seed.py` | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
 | `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py`; hosted members (D9: A and C get Cy's, B gets Ben's) | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
@@ -719,8 +812,9 @@ Every non-2xx response uses this body:
 | 400 | `bad_request` | Malformed JSON or headers |
 | 400 | `webhook_unverified` | Webhook signature verification failed |
 | 401 | `unauthorized` | Hosted: a private backend route without the right `BACKEND_API_TOKEN` (D9) |
-| 404 | `not_found` | Unknown order, check, authorisation or SKU |
+| 404 | `not_found` | Unknown order, check, authorisation, SKU or dispute |
 | 409 | `invalid_state` | The action isn't allowed in the order's current status (see transitions), or the order lacks the identifiers `/risk/check` needs |
+| 409 | `dispute_not_awaiting_evidence` | D8: PayPal isn't asking the seller for evidence on this dispute (`details.dispute_status`) |
 | 409 | `policy_mismatch` | `/merchant/decide` decision differs from the policy result |
 | 422 | `validation_error` | Missing, invalid or unexpected fields (e.g. `identifiers` sent to `/risk/check`); `details` names the fields |
 | 429 | `rate_limited` | Web chat routes only: over the per-visitor or global limit (D9) |
@@ -733,9 +827,12 @@ Every non-2xx response uses this body:
 
 - **PayPal calls:** every POST to PayPal sends `PayPal-Request-Id: <order_id>:<action>`, where `<action>` is `create`,
   `authorize`, `capture` or `void`. A retry of the same action reuses the same ID, so PayPal returns the original result.
+  Dispute evidence (D8) sends `PayPal-Request-Id: <dispute_id>:evidence`.
 - **Our endpoints are idempotent on `order_id`.** `authorize`, `capture`, `void`, `/risk/check`, `/merchant/process` and
   `/merchant/decide` return the stored result if the action already happened for that order. They don't call PayPal or
   rerun PSI. A call that conflicts with the stored state (e.g. void after capture) returns `409 invalid_state`.
+- **Dispute evidence (D8)** is idempotent on `dispute_id`: once submitted, a repeat returns the stored submission.
+  A dispute is drafted at most once (the `pending` claim).
 - **Webhooks:** deduplicated on `paypal_event_id`.
 - **Concurrency:** `/merchant/process` moves the order to `checking` in one conditional update (`WHERE status IN
   ('approved','created','failed')`). Whichever trigger loses the race (webhook or `onApprove`) gets `202`.

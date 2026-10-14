@@ -14,6 +14,7 @@ from sqlalchemy import Connection, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import events, orders
+from app.disputes import DISPUTE_EVENTS, order_conditions, sync_dispute
 from app.errors import APIError
 from app.ids import new_id
 from app.payments import HONOR_PERIOD, get_paypal, parse_time
@@ -47,11 +48,14 @@ def unverified_payload(event: dict) -> dict:
 
 
 def find_order_id(conn: Connection, event_type: str, resource: dict) -> str | None:
-    """Our order for this event: the PayPal order ID on CHECKOUT.ORDER.*; otherwise
-    `custom_id` (our order ID, copied from the purchase unit) or the related PayPal order."""
+    """Our order for this event: the PayPal order ID on CHECKOUT.ORDER.*; on CUSTOMER.DISPUTE.*
+    the disputed transaction's capture ID or `custom` (D8); otherwise `custom_id` (our order
+    ID, copied from the purchase unit) or the related PayPal order."""
     candidates = []
     if event_type.startswith("CHECKOUT.ORDER."):
         candidates.append(orders.c.paypal_order_id == resource.get("id"))
+    if event_type.startswith("CUSTOMER.DISPUTE."):
+        candidates += order_conditions(resource)
     if resource.get("custom_id"):
         candidates.append(orders.c.id == resource["custom_id"])
     related = (resource.get("supplementary_data") or {}).get("related_ids") or {}
@@ -103,7 +107,8 @@ def apply_event(conn: Connection, event_type: str, order_id: str, resource: dict
             .where(order.id == order_id, order.status.in_(("checking", "held")))
             .values(status="captured")
         )
-    # CUSTOMER.DISPUTE.CREATED and anything else: store only.
+    # CUSTOMER.DISPUTE.* change no order (sync_dispute runs after the 200); anything else:
+    # store only.
     return False
 
 
@@ -120,6 +125,8 @@ async def paypal_webhook(request: Request, background: BackgroundTasks) -> dict:
         raise APIError(400, "bad_request", "Not a PayPal webhook event.")
     event_type = str(event["event_type"])
     resource = event.get("resource") if isinstance(event.get("resource"), dict) else {}
+    # Disputes carry `dispute_id` rather than `id`.
+    resource_id = resource.get("id") or resource.get("dispute_id")
 
     try:
         verified = await get_paypal(request).verify_webhook_signature(
@@ -140,7 +147,7 @@ async def paypal_webhook(request: Request, background: BackgroundTasks) -> dict:
             "paypal_event_id": str(event["id"]) if verified else None,
             "event_type": event_type[:128],
             "order_id": order_id,
-            "resource_id": resource.get("id") if verified else None,
+            "resource_id": resource_id if verified else None,
             "verified": verified,
             "payload": event if verified else unverified_payload(event),
         }
@@ -160,6 +167,9 @@ async def paypal_webhook(request: Request, background: BackgroundTasks) -> dict:
         logger.warning("webhook %s failed verification", event_type)
         raise APIError(400, "webhook_unverified", "Webhook signature verification failed.")
     logger.info("webhook %s %s for order %s", event_type, event["id"], order_id)
+    if event_type in DISPUTE_EVENTS and resource.get("dispute_id"):
+        # After the 200: read the dispute from PayPal, store it and draft evidence (D8).
+        background.add_task(sync_dispute, request.app.state, str(resource["dispute_id"]), resource)
     if run_process and settings.process_on_approval:
         # After commit: a Render Workflows run when hosted, else after the 200 (app/workflow.py).
         await start_risk_agent(request.app.state, order_id, background)

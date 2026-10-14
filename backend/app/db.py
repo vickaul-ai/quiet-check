@@ -113,6 +113,29 @@ events = Table(
     Column("created_at", Timestamp(), nullable=False, default=utcnow),
 )
 
+# One row per PayPal dispute (D8). `id` is PayPal's dispute ID; `order_id` is null when the
+# dispute matched none of our orders. The draft is written by the model (or the template) and
+# only a reviewer submits it.
+disputes = Table(
+    "disputes",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("order_id", Text, ForeignKey("orders.id"), index=True),
+    Column("reason", Text),
+    Column("status", Text),
+    Column("amount_value", Text),
+    Column("currency_code", Text),
+    Column("seller_response_due_date", Timestamp()),
+    Column("draft_note", Text),
+    Column("draft_source", Text),  # "llm", "template", or "pending" while a draft is written
+    Column("drafted_at", Timestamp()),
+    Column("submitted_note", Text),
+    Column("submitted_at", Timestamp()),
+    Column("submitted_by", Text),
+    Column("created_at", Timestamp(), nullable=False, default=utcnow),
+    Column("updated_at", Timestamp(), nullable=False, default=utcnow, onupdate=utcnow),
+)
+
 
 def make_engine(database_url: str) -> Engine:
     """Create the engine and the tables. `postgresql://` URLs use psycopg 3."""

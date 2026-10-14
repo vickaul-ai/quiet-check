@@ -1,4 +1,5 @@
-"""PayPal REST client (sandbox): OAuth token cache, Orders v2, Payments v2, webhook verification.
+"""PayPal REST client (sandbox): OAuth token cache, Orders v2, Payments v2, Disputes v1, webhook
+verification.
 
 The Agent Toolkit has no authorise or void tool, so this calls the REST endpoints directly.
 Every POST that moves money sends `PayPal-Request-Id` (docs/contracts.md, Idempotency).
@@ -115,15 +116,16 @@ class PayPalClient:
         *,
         json_body: dict | None = None,
         content: str | None = None,
+        files: dict | None = None,
         request_id: str | None = None,
     ) -> dict:
         """Send an authenticated call; returns the JSON body ({} for 204). On 401 the token is
-        refreshed once (it may have been revoked early)."""
+        refreshed once (it may have been revoked early). With `files`, the body is
+        multipart/form-data and httpx sets the Content-Type (with its boundary)."""
         for attempt in (1, 2):
-            headers = {
-                "Authorization": f"Bearer {await self._access_token()}",
-                "Content-Type": "application/json",
-            }
+            headers = {"Authorization": f"Bearer {await self._access_token()}"}
+            if files is None:
+                headers["Content-Type"] = "application/json"
             if request_id:
                 headers["PayPal-Request-Id"] = request_id
             try:
@@ -133,6 +135,7 @@ class PayPalClient:
                     headers=headers,
                     json=json_body,
                     content=content if json_body is None else None,
+                    files=files,
                 )
             except httpx.HTTPError as exc:
                 raise PayPalError(None, "CONNECTION_ERROR", type(exc).__name__) from None
@@ -200,6 +203,47 @@ class PayPalClient:
             f"/v2/payments/authorizations/{authorization_id}/reauthorize",
             json_body={},
             request_id=request_id,
+        )
+
+    # Disputes v1 (D8)
+
+    async def get_dispute(self, dispute_id: str) -> dict:
+        return await self.request("GET", f"/v1/customer/disputes/{dispute_id}")
+
+    async def list_disputes(self, page_size: int = 10) -> dict:
+        return await self.request("GET", f"/v1/customer/disputes?page_size={page_size}")
+
+    async def provide_evidence(self, dispute_id: str, notes: str, request_id: str) -> dict:
+        """Notes-only evidence (type OTHER, up to 2000 characters). PayPal takes this as
+        multipart/form-data with the JSON in a part named `input` (`application/json`), as in
+        its Disputes API guide's sample; documents would be further file parts. PayPal accepts
+        it only while the dispute is WAITING_FOR_SELLER_RESPONSE and shows a provide-evidence
+        link. Returns PayPal's links."""
+        evidence = {"evidences": [{"evidence_type": "OTHER", "notes": notes}]}
+        return await self.request(
+            "POST",
+            f"/v1/customer/disputes/{dispute_id}/provide-evidence",
+            files={"input": (None, json.dumps(evidence), "application/json")},
+            request_id=request_id,
+        )
+
+    async def require_evidence(self, dispute_id: str, action: str = "SELLER_EVIDENCE") -> dict:
+        """Sandbox only: move an UNDER_REVIEW dispute to WAITING_FOR_SELLER_RESPONSE
+        (SELLER_EVIDENCE) or WAITING_FOR_BUYER_RESPONSE (BUYER_EVIDENCE). Used only by
+        scripts/dispute_sandbox.py, never by the app."""
+        return await self.request(
+            "POST",
+            f"/v1/customer/disputes/{dispute_id}/require-evidence",
+            json_body={"action": action},
+        )
+
+    async def escalate_dispute(self, dispute_id: str, note: str) -> dict:
+        """Escalate an INQUIRY-stage dispute to a PayPal claim. Used only by
+        scripts/dispute_sandbox.py, to get a sandbox inquiry to UNDER_REVIEW."""
+        return await self.request(
+            "POST",
+            f"/v1/customer/disputes/{dispute_id}/escalate",
+            json_body={"note": note},
         )
 
     # Webhooks

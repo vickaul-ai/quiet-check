@@ -24,10 +24,10 @@ a model swap layer, SQLite locally and Postgres on Render. Details and model cho
 
 ## Data model
 
-Tables `orders`, `checks`, `receipts`, `decisions`, `events`: see [contracts.md](contracts.md#database-tables). All five
+Tables `orders`, `checks`, `receipts`, `decisions`, `events`, `disputes`: see [contracts.md](contracts.md#database-tables). All six
 are defined in `backend/app/db.py` (SQLAlchemy Core) and created at startup with `create_all`; JSON columns are JSONB on
 Postgres (ADR 0005). D2 writes `checks`, `receipts` and `events`; D3 writes `orders` and `events` and fills
-`decisions.resolution` on reviewer actions; D4 writes `decisions` and moves order status.
+`decisions.resolution` on reviewer actions; D4 writes `decisions` and moves order status; D8 writes `disputes`.
 
 ## AP3 risk check (D2)
 
@@ -98,6 +98,23 @@ model's order summary and defines the copilot tools. `app/api/console/chat/route
 renders the Approve/Deny card and sends the response back with `sendAutomaticallyWhen:
 lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that second request.
 
+## Dispute evidence drafts (D8)
+
+ADR 0012. `app/disputes.py`: a verified `CUSTOMER.DISPUTE.*` webhook is stored with its order (matched by the disputed
+transaction's `seller_transaction_id` = our capture ID, else `custom` = our order ID) and starts `sync_dispute` as a
+background task after the `200`. It reads the dispute from PayPal (`PayPalClient.get_dispute`; the webhook resource on
+failure), upserts the `disputes` row, claims the draft (`draft_source: "pending"`) and calls `write_draft`:
+`init_chat_model(f"{LLM_PROVIDER}:{LLM_MODEL_SMART}")` with `prompts/dispute_evidence.md` and the JSON from
+`fact_sheet`, which reads only order, check, receipt, decision and event rows and leaves out payer identifiers, device
+ID, hashes and reviewer notes. A model error, 60 s timeout or empty reply gives `template_note` from the same facts.
+Settings take a `dispute_model` so tests inject a fake (the same `FakeModel` as the rationale). `submit_evidence`
+(behind `POST /merchant/disputes/{id}/evidence`) re-reads the dispute, refuses with `409
+dispute_not_awaiting_evidence` unless PayPal is `WAITING_FOR_SELLER_RESPONSE` with a provide-evidence link, then
+`PayPalClient.provide_evidence` sends multipart/form-data with an `input` JSON part (httpx `files=`). Console:
+`DisputeCard` in `components/console.tsx` (editable note, in-page confirmation) posts to
+`app/api/console/disputes/[disputeId]/evidence/route.ts`. The fake PayPal (`tests/fake_paypal.py`) keeps disputes,
+parses the multipart `input` part and implements require-evidence; `tests/test_disputes.py` covers the flow.
+
 ## Key files
 
 | Path | Holds |
@@ -113,6 +130,8 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 | `backend/app/webhooks.py` | `POST /webhooks/paypal`; starts the risk agent on `CHECKOUT.ORDER.APPROVED` |
 | `backend/app/merchant.py` | `/merchant`: process, decide, orders, order detail and status, events |
 | `backend/app/policy.py`, `rationale.py` | The deterministic policy; the model rationale and its template fallback |
+| `backend/app/disputes.py` | D8: dispute matching and storage, the fact sheet, the evidence draft (model or template), evidence submission |
+| `backend/scripts/dispute_sandbox.py` | `make dispute-sandbox`: show or list sandbox disputes; `--escalate`, `--require-evidence` (sandbox-only) |
 | `backend/app/personas.json`, `personas.py`, `demo_data.py` | Personas (device IDs, seeds, expected outcomes); list generation |
 | `backend/scripts/seed.py` | `make seed`: writes the demo member lists |
 | `backend/scripts/live_personas.py` | `make live-personas`: the three personas through the sandbox, webhook-driven |
@@ -132,6 +151,7 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 | `web/app/console/page.tsx`, `web/components/console.tsx` | Merchant console: orders table, order detail (rationale, hit grid, receipts, who saw what), live event feed |
 | `web/components/copilot.tsx`, `web/lib/copilot.ts`, `web/app/api/console/chat/route.ts` | Review copilot UI with the Approve/Deny card; its tools and route |
 | `web/app/api/console/{orders,events}/` | Server proxies for the console's reads (payer details removed) |
+| `web/app/api/console/disputes/[disputeId]/evidence/route.ts` | D8: the reviewer's evidence submission -> backend |
 | `web/lib/model.ts`, `env.ts`, `backend.ts`, `personas.ts`, `types.ts` | Model factory, root `.env` loading, backend client, persona loading, shared types and buyer text |
 | `web/public/products/` | Product SVGs (referenced by `catalog.json`'s `image`) |
 | `scripts/check_sandbox.py` | PayPal sandbox OAuth check (uv inline-script dependencies) |
@@ -163,6 +183,16 @@ lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that seco
 - Hosted (D9): `bash scripts/render_setup.sh` walks through the first deploy; `scripts/check_hosted.sh <backend> <web>`
   smoke-checks it. Details in [deploy-render.md](deploy-render.md). Run the backend suite on Postgres with
   `QC_TEST_POSTGRES_URL=postgresql://user@host:port/postgres uv run pytest` (CI does).
+- Sandbox dispute (D8 live acceptance): with the backend reachable by PayPal's webhooks (ngrok locally, or the hosted
+  backend) and `CUSTOMER.DISPUTE.CREATED` on the webhook's event list, buy as Ana until the order is `captured`. Log in
+  at https://www.sandbox.paypal.com as Ana's sandbox buyer, open the payment under Activity and report a problem
+  (Resolution Center), for example "I didn't authorise this" (`UNAUTHORISED`). Within a minute or so the console's
+  order shows "disputed" and a Dispute card with the draft (the webhook can take several minutes in sandbox). Then
+  `make dispute-sandbox ARGS="PP-D-..."` shows its status. Evidence can be sent only in
+  `WAITING_FOR_SELLER_RESPONSE`: from `OPEN` (an inquiry), run `ARGS="PP-D-... --escalate"` (to a claim, `UNDER_REVIEW`),
+  then `ARGS="PP-D-... --require-evidence"` (sandbox only, to `WAITING_FOR_SELLER_RESPONSE`); PayPal says to wait a few
+  minutes after creating a dispute before its actions work. Then edit the draft in the console and press "Submit
+  evidence to PayPal". `ARGS=--list` lists the app's disputes.
 - Hosted persona run (D10): `make e2e-hosted` (needs `PERSONA_*_PASSWORD` and the console password in `.env`; see
   `.env.example`). Each order gets a fresh browser context, so no PayPal login carries over between buyers. Failure
   screenshots go to `backend/var/e2e/`.

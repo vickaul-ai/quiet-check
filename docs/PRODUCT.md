@@ -33,6 +33,15 @@ file tracks what exists today.
   copilot explains a hold ("why is this on hold?") and, on the reviewer's instruction, captures or voids the held
   payment after one Approve on a card showing the order, amount, action and note. Hosted, the console asks for a shared password (D9). Presentation pass (2026-10-14): the shop explains the three steps and each persona's expected outcome and links each final status to the console; the console states the policy up front, names each order's buyer (from `device_id` in the orders list), hides orders never approved in PayPal, groups the members in who-saw-what, folds the receipts behind one disclosure and labels feed events in plain words.
 
+- **Dispute evidence drafts (D8):** when a buyer opens a PayPal dispute on an order, the backend reads it from PayPal,
+  matches it to the order and has `LLM_MODEL_SMART` draft an evidence note from the receipts and the decision log
+  (no payer identifiers go to the model; a template stands in if the model fails). The console marks the order
+  "disputed" and shows a Dispute card: the reason in plain words, PayPal's status, the amount, the response due date
+  and the editable draft with a character count. The reviewer edits it and submits it to PayPal after an in-page
+  confirmation; the AI never submits. The note says what the check shows (the buyer's identifiers were or weren't on
+  three merchants' abuse lists at purchase time; authorise first, capture after the check) and that it isn't proof of
+  identity (ADR 0012).
+
 ## Roadmap
 
 | Deliverable | Adds |
@@ -43,7 +52,7 @@ file tracks what exists today.
 | D5 | Shopping agent and storefront with PayPal approval |
 | D6 | Merchant console: review queue, receipts, who-saw-what, review copilot |
 | D7 | Demo data and the three personas |
-| D8 | Dispute evidence drafts (stretch) |
+| D8 | Dispute evidence drafts (built 2026-10-14) |
 
 ## Known gaps
 
@@ -55,6 +64,10 @@ file tracks what exists today.
   public surface or add auth.
 - No reauthorisation endpoint: a hold older than the 3-day honour period can be reauthorised only from code (ADR 0007).
 - Live payment tests need a human to approve each sandbox order once (ADR 0007).
+- Dispute evidence is notes-only (`evidence_type: OTHER`): no documents, tracking or refund IDs. The multipart format
+  follows PayPal's guide and the CI fake; a live sandbox submission hasn't been run yet. One draft per dispute (no
+  redraft button); `CUSTOMER.DISPUTE.UPDATED`/`RESOLVED` refresh the status only if subscribed. Disputes that match no
+  order are stored but not shown in the console.
 - An order whose risk-agent run dies mid-way (for example, a server restart) stays `checking`; there is no sweeper yet.
 
 ## Non-goals

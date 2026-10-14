@@ -1,7 +1,7 @@
 import "server-only";
 
 import { backendToken, backendUrl } from "./env";
-import type { CartLine, ConsoleEvent, OrderDetail, OrderRow, Product } from "./types";
+import type { CartLine, ConsoleEvent, Dispute, OrderDetail, OrderRow, Product } from "./types";
 
 // Server-side calls to the FastAPI backend (docs/contracts.md). Errors keep the contract's
 // `{error: {code, message}}` body so routes can pass the code on.
@@ -81,4 +81,11 @@ export type Resolution = { order_id: string; authorization_id: string; status: s
 export async function resolveHold(action: "capture" | "void", authorizationId: string, note: string): Promise<Resolution> {
   const path = `/payments/authorizations/${encodeURIComponent(authorizationId)}/${action}`;
   return (await call<Resolution>("POST", path, { actor: "reviewer", note })).data;
+}
+
+// D8: the reviewer's click sends the (edited) evidence note to PayPal. The backend re-reads the dispute and refuses
+// with 409 `dispute_not_awaiting_evidence` unless PayPal is asking the seller for evidence.
+export async function submitDisputeEvidence(disputeId: string, note: string): Promise<Dispute> {
+  const path = `/merchant/disputes/${encodeURIComponent(disputeId)}/evidence`;
+  return (await call<Dispute>("POST", path, { note, actor: "reviewer" })).data;
 }

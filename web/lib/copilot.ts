@@ -60,6 +60,15 @@ function summary(order: OrderDetail) {
     honor_period_left: order.status === "held" ? timeLeft(order.honor_period_ends_at) : null,
     resolution: order.decision?.resolution ?? null,
     resolution_note: order.decision?.resolution_note ?? null,
+    // D8: read-only. The copilot has no tool to submit evidence; the reviewer does that in the Dispute card.
+    disputes: (order.disputes ?? []).map((d) => ({
+      dispute_id: d.dispute_id,
+      reason: d.reason,
+      paypal_status: d.status,
+      seller_response_due: d.seller_response_due_date,
+      draft: d.draft_source === "pending" || !d.draft_source ? "not ready yet" : `ready (${d.draft_source})`,
+      evidence_submitted_at: d.submitted_at,
+    })),
   };
 }
 
@@ -97,8 +106,8 @@ export function copilotTools(selectedOrderId: string) {
   return {
     get_order: tool({
       description:
-        "Read an order's status, policy decision, rationale, consortium hit summary, receipt verification and " +
-        "honour-period time left. Call it before explaining an order.",
+        "Read an order's status, policy decision, rationale, consortium hit summary, receipt verification, " +
+        "honour-period time left and any PayPal disputes. Call it before explaining an order.",
       inputSchema: z.object({ order_id: z.string().describe("Our order ID (ord_...)") }),
       execute: async ({ order_id }) => {
         try {

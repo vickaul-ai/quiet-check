@@ -32,6 +32,7 @@ make dev                  # backend on :8000, web on :3000
 | `make gate-a END=capture` | Gate A on 1 saved order: the risk agent -> capture (or `END=void`: hold -> reviewer void) |
 | `bash scripts/render_setup.sh` | Walks through creating the hosted demo on Render from `render.yaml` ([docs/deploy-render.md](docs/deploy-render.md)) |
 | `scripts/check_hosted.sh <backend URL> <web URL>` | Smoke-checks the hosted demo: public routes answer, private ones refuse, with response times |
+| `make dispute-sandbox ARGS="PP-D-... --require-evidence"` | D8: shows a sandbox dispute (`ARGS=--list` lists them); `--escalate` turns an inquiry into a claim, `--require-evidence` moves a claim to "waiting for seller evidence" so the console can submit |
 | `make live-personas` | Ana, Ben and Cy through the sandbox: approve 3 printed links as the 3 persona buyers; the webhook alone must give captured, held and blocked. `scripts/live_personas.py --persona ben` reruns a subset. Log out of sandbox PayPal between buyers: the checkout reuses the last login, even across incognito windows |
 
 ## Environment variables

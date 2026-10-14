@@ -1,5 +1,5 @@
 .PHONY: install dev dev-backend dev-web dev-member-A dev-member-B dev-member-C check sandbox \
-	seed approve-orders test-live gate-a live-personas e2e-hosted
+	seed approve-orders test-live gate-a live-personas e2e-hosted dispute-sandbox
 
 install:
 	cd backend && uv sync
@@ -46,3 +46,8 @@ live-personas:
 # D10 / Gate C: Ana, Ben and Cy through the hosted shop and PayPal pop-up. ARGS e.g. --persona ben --headed
 e2e-hosted:
 	uv run scripts/e2e_hosted.py $(ARGS)
+
+# D8 live acceptance: show a sandbox dispute and move it to WAITING_FOR_SELLER_RESPONSE.
+# ARGS e.g. "PP-D-12345 --require-evidence", or "--list".
+dispute-sandbox:
+	cd backend && uv run python scripts/dispute_sandbox.py $(ARGS)

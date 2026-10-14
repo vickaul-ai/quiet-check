@@ -6,7 +6,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Copilot } from "@/components/copilot";
 import {
   FIELD_LABELS,
+  MAX_EVIDENCE_NOTE,
   type ConsoleEvent,
+  type Dispute,
   type OrderDetail as Detail,
   type OrderRow,
   type Persona,
@@ -131,7 +133,7 @@ export function Console({ personas, hosted }: { personas: Persona[]; hosted: boo
       <OrdersTable orders={orders} selectedId={selectedId} onSelect={select} personas={personas} />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <OrderDetail detail={detail} loading={!!selectedId && !detail} personas={personas} />
+        <OrderDetail detail={detail} loading={!!selectedId && !detail} personas={personas} onChanged={refresh} />
         <div className="flex min-w-0 flex-col gap-4">
           {selected && <Copilot key={selected.order_id} order={selected} onResolved={refresh} />}
           <EventFeed events={events} selectedId={selectedId} />
@@ -183,6 +185,15 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-block rounded-full border border-current px-2 py-0.5 text-xs font-medium ${STATUS_TONE[status] ?? "text-[var(--muted)]"}`}>
       {status}
+    </span>
+  );
+}
+
+// Shown next to the status of an order the buyer disputed in PayPal (D8).
+function DisputedChip() {
+  return (
+    <span className="ml-1 inline-block rounded-full bg-[var(--bad)] px-2 py-0.5 text-xs font-medium text-[var(--bg)]">
+      disputed
     </span>
   );
 }
@@ -283,8 +294,9 @@ function OrdersTable({
                 <td className="px-3 py-2">{buyerName(o.device_id, personas) ?? "-"}</td>
                 <td className="px-3 py-2 whitespace-nowrap">{shortTime(o.created_at)}</td>
                 <td className="px-3 py-2">${o.amount.value}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                   <StatusBadge status={o.status} />
+                  {o.dispute_status && <DisputedChip />}
                 </td>
                 <td className="px-3 py-2">{o.decision ?? "-"}</td>
                 <td className="px-3 py-2">{o.hit_count ?? "-"}</td>
@@ -304,7 +316,17 @@ function OrdersTable({
 
 // ---- Order detail
 
-function OrderDetail({ detail, loading, personas }: { detail: Detail | null; loading: boolean; personas: Persona[] }) {
+function OrderDetail({
+  detail,
+  loading,
+  personas,
+  onChanged,
+}: {
+  detail: Detail | null;
+  loading: boolean;
+  personas: Persona[];
+  onChanged: () => void;
+}) {
   const now = useNow();
   if (!detail) {
     return <section className="text-sm text-[var(--muted)]">{loading ? "Loading the order…" : "Select an order."}</section>;
@@ -318,6 +340,7 @@ function OrderDetail({ detail, loading, personas }: { detail: Detail | null; loa
             {buyerName(detail.device_id, personas) ?? "Buyer"} · {detail.items.map((i) => `${i.quantity} x ${i.name}`).join(", ")}
           </h2>
           <StatusBadge status={detail.status} />
+          {detail.dispute_status && <DisputedChip />}
           <span className="text-sm">${detail.amount.value}</span>
           {detail.status === "held" && (
             <span className="text-sm text-[var(--warn)]">Honour period: {honourLeft(detail, now)}</span>
@@ -352,9 +375,173 @@ function OrderDetail({ detail, loading, personas }: { detail: Detail | null; loa
         )}
       </div>
 
+      {(detail.disputes ?? []).map((d) => (
+        <DisputeCard key={d.dispute_id} dispute={d} onSubmitted={onChanged} />
+      ))}
       {detail.check && <HitGrid receipts={detail.receipts} />}
       {detail.receipts.length > 0 && <Receipts receipts={detail.receipts} />}
       <WhoSawWhat rows={detail.who_saw_what} />
+    </section>
+  );
+}
+
+// ---- Dispute (D8): the AI drafts the evidence note; only the reviewer's click sends it to PayPal.
+
+// PayPal's dispute reasons, in the buyer's words (developer.paypal.com/docs/api/customer-disputes/v1).
+const DISPUTE_REASON_TEXT: Record<string, string> = {
+  UNAUTHORISED: "Buyer says they didn't make this purchase",
+  MERCHANDISE_OR_SERVICE_NOT_RECEIVED: "Buyer says the item never arrived",
+  MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED: "Buyer says the item wasn't as described",
+  CREDIT_NOT_PROCESSED: "Buyer says a refund wasn't processed",
+  DUPLICATE_TRANSACTION: "Buyer says they were charged twice",
+  INCORRECT_AMOUNT: "Buyer says they were charged the wrong amount",
+  PAYMENT_BY_OTHER_MEANS: "Buyer says they paid another way",
+  CANCELED_RECURRING_BILLING: "Buyer says they cancelled this recurring payment",
+  PROBLEM_WITH_REMITTANCE: "Buyer reports a problem with the payment",
+  OTHER: "Buyer opened a dispute",
+};
+
+const DISPUTE_STATUS_TEXT: Record<string, string> = {
+  OPEN: "Open",
+  WAITING_FOR_SELLER_RESPONSE: "Waiting for your evidence",
+  WAITING_FOR_BUYER_RESPONSE: "Waiting for the buyer",
+  UNDER_REVIEW: "PayPal is reviewing it",
+  RESOLVED: "Resolved",
+  OTHER: "Other",
+};
+
+const SUBMIT_ERRORS: Record<string, string> = {
+  dispute_not_awaiting_evidence: "PayPal isn't asking for evidence on this dispute yet.",
+  validation_error: `The note must be 1 to ${MAX_EVIDENCE_NOTE} characters.`,
+  paypal_error: "PayPal returned an error. Nothing was sent; try again in a minute.",
+  not_found: "This dispute isn't in Quiet Check any more. Reload the console.",
+  unauthorized: "The console isn't signed in to the backend.",
+};
+
+type SubmitState = "editing" | "confirming" | "sending";
+
+function DisputeCard({ dispute: d, onSubmitted }: { dispute: Dispute; onSubmitted: () => void }) {
+  // The reviewer's edits; null means "show the draft as it is", so a draft that arrives later still appears.
+  const [edited, setEdited] = useState<string | null>(null);
+  const [state, setState] = useState<SubmitState>("editing");
+  const [error, setError] = useState<string | null>(null);
+  const text = edited ?? d.draft_note ?? "";
+  const length = text.trim().length;
+  const tooLong = length > MAX_EVIDENCE_NOTE;
+  const waiting = d.status === "WAITING_FOR_SELLER_RESPONSE";
+  const noteId = `dispute-note-${d.dispute_id}`;
+
+  async function send() {
+    setState("sending");
+    setError(null);
+    const res = await fetch(`/api/console/disputes/${encodeURIComponent(d.dispute_id)}/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: text }),
+    }).catch(() => null);
+    if (res?.ok) {
+      setState("editing");
+      onSubmitted();
+      return;
+    }
+    const code = res ? ((await res.json().catch(() => null))?.error?.code as string | undefined) : undefined;
+    setError(SUBMIT_ERRORS[code ?? ""] ?? "Couldn't reach the backend. Nothing was sent; try again.");
+    setState("editing");
+  }
+
+  return (
+    <section aria-label="Dispute" className="rounded-lg border border-[var(--bad)] p-4">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-[var(--bad)]">
+          Dispute: {DISPUTE_REASON_TEXT[d.reason ?? ""] ?? d.reason ?? "Buyer opened a dispute"}
+        </h3>
+        <Mono>{d.dispute_id}</Mono>
+      </div>
+      <dl className="mt-2 grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1 text-xs">
+        <dt className="text-[var(--muted)]">PayPal status</dt>
+        <dd>
+          {DISPUTE_STATUS_TEXT[d.status ?? ""] ?? d.status ?? "-"}{" "}
+          {d.status && <span className="font-mono text-[10px] text-[var(--muted)]">{d.status}</span>}
+        </dd>
+        <dt className="text-[var(--muted)]">Disputed amount</dt>
+        <dd>{d.amount ? `$${d.amount.value} ${d.amount.currency_code}` : "-"}</dd>
+        <dt className="text-[var(--muted)]">Respond by</dt>
+        <dd>{d.seller_response_due_date ? shortTime(d.seller_response_due_date) : "-"}</dd>
+      </dl>
+
+      {d.submitted_at ? (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-[var(--good)]">
+            Evidence submitted to PayPal by the reviewer on {shortTime(d.submitted_at)}
+          </p>
+          <p className="mt-1 rounded-md bg-[var(--panel)] p-2 text-sm leading-relaxed whitespace-pre-wrap">{d.submitted_note}</p>
+        </div>
+      ) : !d.draft_source || d.draft_source === "pending" ? (
+        <p className="mt-3 text-sm text-[var(--muted)]">
+          {d.order_id ? "Drafting the evidence note from the receipts and decision log…" : "No order matched, so there's no draft."}
+        </p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2">
+          <label htmlFor={noteId} className="text-xs font-medium text-[var(--muted)]">
+            Evidence note,{" "}
+            {d.draft_source === "llm"
+              ? "drafted by the AI from the receipts and decision log"
+              : "from the template (model unavailable)"}
+            . Check it and edit before you submit; nothing goes to PayPal until you do.
+          </label>
+          <textarea
+            id={noteId}
+            value={text}
+            onChange={(e) => {
+              setEdited(e.currentTarget.value);
+              if (state === "confirming") setState("editing");
+            }}
+            disabled={state === "sending"}
+            rows={10}
+            className="w-full rounded-md border border-[var(--line)] bg-[var(--bg)] p-2 font-mono text-xs leading-relaxed"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className={tooLong ? "text-[var(--bad)]" : "text-[var(--muted)]"}>
+              {length} / {MAX_EVIDENCE_NOTE} characters
+            </span>
+            {!waiting && (
+              <span className="text-[var(--muted)]">PayPal accepts evidence only while it&apos;s waiting for yours.</span>
+            )}
+          </div>
+          {state === "confirming" ? (
+            <div role="group" aria-label="Confirm evidence submission" className="rounded-md bg-[var(--accent-soft)] p-3 text-sm">
+              <p>
+                Send this note to PayPal as your evidence for dispute <Mono>{d.dispute_id}</Mono>? You can&apos;t change it
+                afterwards.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={send}
+                  className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-fg)]"
+                >
+                  Yes, submit to PayPal
+                </button>
+                <button onClick={() => setState("editing")} className="rounded-md border border-[var(--line)] px-3 py-1.5 text-sm">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setState("confirming")}
+              disabled={state === "sending" || length === 0 || tooLong}
+              className="self-start rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-fg)] disabled:opacity-50"
+            >
+              {state === "sending" ? "Submitting…" : "Submit evidence to PayPal"}
+            </button>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-[var(--bad)]">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -517,12 +704,20 @@ const EVENT_LABELS: Record<string, string> = {
   "PAYMENT.AUTHORIZATION.CREATED": "Authorisation created",
   "PAYMENT.AUTHORIZATION.VOIDED": "Authorisation voided",
   "PAYMENT.CAPTURE.COMPLETED": "Capture completed",
+  "dispute.drafted": "Dispute evidence drafted",
+  "dispute.evidence_submitted": "Reviewer submitted dispute evidence",
+  "CUSTOMER.DISPUTE.CREATED": "Buyer opened a dispute",
+  "CUSTOMER.DISPUTE.UPDATED": "Dispute updated",
+  "CUSTOMER.DISPUTE.RESOLVED": "Dispute resolved",
 };
 
 function eventDetail(e: ConsoleEvent): string {
   const p = e.payload ?? {};
   // Workflow internals (runner, task run IDs) stay in the logs and the API, not the feed.
-  const keys = ["summary", "decision", "hit_count", "actor", "note", "capture_status", "authorization_status", "action", "issue", "error"];
+  const keys = [
+    "summary", "decision", "hit_count", "actor", "note", "capture_status", "authorization_status", "action", "issue", "error",
+    "dispute_id", "draft_source", "dispute_status",
+  ];
   return keys
     .filter((k) => p[k] !== undefined && p[k] !== null && p[k] !== "")
     .map((k) => `${k}: ${String(p[k])}`)

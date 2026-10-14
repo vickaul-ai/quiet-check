@@ -8,7 +8,7 @@ from app.db import make_engine, receipts
 def test_tables_created(tmp_path) -> None:
     engine = make_engine(f"sqlite:///{tmp_path / 'test.db'}")
     names = set(inspect(engine).get_table_names())
-    assert names == {"orders", "checks", "receipts", "decisions", "events"}
+    assert names == {"orders", "checks", "receipts", "decisions", "events", "disputes"}
 
 
 def test_json_columns_are_jsonb_on_postgres() -> None:

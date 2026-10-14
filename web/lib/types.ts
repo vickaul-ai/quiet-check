@@ -50,6 +50,7 @@ export type OrderRow = {
   capture_id: string | null;
   honor_period_ends_at: string | null;
   device_id: string; // the demo device the storefront recorded (names the persona)
+  dispute_status: string | null; // the newest PayPal dispute's status (D8)
   created_at: string;
 };
 
@@ -82,6 +83,26 @@ export type Decision = {
 
 export type WhoSawWhat = { party: string; sent: string; learned: string; never_saw: string };
 
+// A PayPal dispute on an order (D8). The model drafts `draft_note`; only a reviewer submits it.
+export type Dispute = {
+  dispute_id: string;
+  order_id: string | null;
+  reason: string | null;
+  status: string | null;
+  amount: Money | null;
+  seller_response_due_date: string | null;
+  draft_note: string | null;
+  draft_source: "llm" | "template" | "pending" | null;
+  drafted_at: string | null;
+  submitted_note: string | null;
+  submitted_at: string | null;
+  submitted_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export const MAX_EVIDENCE_NOTE = 2000; // PayPal's limit on evidence notes
+
 export type OrderDetail = Omit<OrderRow, "decision"> & {
   items: (CartLine & { name: string; unit_amount: Money })[];
   device_id: string;
@@ -89,6 +110,7 @@ export type OrderDetail = Omit<OrderRow, "decision"> & {
   receipts: Receipt[];
   decision: Decision | null;
   who_saw_what: WhoSawWhat[];
+  disputes: Dispute[]; // newest first
 };
 
 export type ConsoleEvent = {

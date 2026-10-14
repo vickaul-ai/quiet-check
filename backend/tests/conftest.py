@@ -129,6 +129,8 @@ def paypal_settings(fake: FakePayPal, model: FakeModel) -> dict:
         "paypal_transport": fake.transport,
         "rationale_model": model,
         "rationale_timeout_s": 1.0,
+        "dispute_model": model,
+        "dispute_timeout_s": 1.0,
     }
 
 

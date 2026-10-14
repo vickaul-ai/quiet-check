@@ -1,10 +1,14 @@
-"""An in-memory PayPal sandbox for CI: an httpx MockTransport that keeps order and authorisation
-state, honours PayPal-Request-Id, and verifies webhooks whose signature header is "good".
+"""An in-memory PayPal sandbox for CI: an httpx MockTransport that keeps order, authorisation and
+dispute state, honours PayPal-Request-Id, and verifies webhooks whose signature header is "good".
 
 Response shapes follow PayPal's published Orders v2 / Payments v2 / Webhooks v1 schemas
-(developer.paypal.com/api/*/schema.json, checked 2026-10-13).
+(developer.paypal.com/api/*/schema.json, checked 2026-10-13) and Disputes v1 (checked
+2026-10-14; provide-evidence as multipart/form-data with an `input` JSON part, per PayPal's
+Disputes API guide).
 """
 
+import email.parser
+import email.policy
 import json
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -38,6 +42,8 @@ class FakePayPal:
     def __init__(self) -> None:
         self.orders: dict[str, dict] = {}
         self.authorizations: dict[str, dict] = {}
+        self.disputes: dict[str, dict] = {}
+        self.evidence: dict[str, list[dict]] = {}  # dispute ID -> submitted evidences
         self.requests: list[httpx.Request] = []
         self.token_calls = 0
         self.idempotent: dict[str, tuple[int, bytes]] = {}  # PayPal-Request-Id -> response
@@ -52,6 +58,60 @@ class FakePayPal:
         order["status"] = "APPROVED"
         order["payer"] = {"email_address": email, "payer_id": _id(13)}
         order["purchase_units"][0]["shipping"] = {"name": {"full_name": "Test"}, "address": address}
+
+    def open_dispute(
+        self,
+        capture_id: str,
+        reason: str = "UNAUTHORISED",
+        status: str = "WAITING_FOR_SELLER_RESPONSE",
+        buyer_email: str = "buyer@example.com",
+        seller_transaction_id: str | None = None,
+    ) -> dict:
+        """A buyer opens a dispute on a captured payment. The transaction carries the buyer's
+        name and email, as PayPal's does, so tests can check they never reach the model."""
+        auth = next(
+            a for a in self.authorizations.values() if a.get("capture", {}).get("id") == capture_id
+        )
+        created = _now()
+        dispute_id = f"PP-D-{secrets.randbelow(10**6):06d}"
+        self.disputes[dispute_id] = {
+            "dispute_id": dispute_id,
+            "create_time": _z(created),
+            "update_time": _z(created),
+            "disputed_transactions": [
+                {
+                    "buyer_transaction_id": _id(),
+                    "seller_transaction_id": seller_transaction_id or capture_id,
+                    "create_time": auth["capture"]["create_time"],
+                    "transaction_status": "COMPLETED",
+                    "gross_amount": auth["amount"],
+                    "custom": auth["custom_id"],
+                    "buyer": {"name": "Test Buyer", "email": buyer_email},
+                    "seller": {"merchant_id": _id(13), "name": "Quiet Check Test Shop"},
+                }
+            ],
+            "reason": reason,
+            "status": status,
+            "dispute_amount": auth["amount"],
+            "dispute_life_cycle_stage": "CHARGEBACK",
+            "dispute_channel": "INTERNAL",
+            "seller_response_due_date": _z(created + timedelta(days=10)),
+        }
+        return self.disputes[dispute_id]
+
+    def dispute_view(self, dispute: dict) -> dict:
+        """GET shape: HATEOAS links depend on the status, as on PayPal."""
+        base = f"https://api-m.sandbox.paypal.com/v1/customer/disputes/{dispute['dispute_id']}"
+        links = [{"href": base, "rel": "self", "method": "GET"}]
+        if dispute["status"] == "WAITING_FOR_SELLER_RESPONSE":
+            links.append(
+                {"href": f"{base}/provide-evidence", "rel": "provide_evidence", "method": "POST"}
+            )
+        if dispute["status"] == "UNDER_REVIEW":
+            links.append(
+                {"href": f"{base}/require-evidence", "rel": "require_evidence", "method": "POST"}
+            )
+        return {**dispute, "links": links}
 
     def calls(self, method: str, suffix: str) -> list[httpx.Request]:
         return [r for r in self.requests if r.method == method and r.url.path.endswith(suffix)]
@@ -87,7 +147,10 @@ class FakePayPal:
 
     def _route(self, request: httpx.Request, path: str) -> httpx.Response:
         parts = path.strip("/").split("/")
-        body = json.loads(request.content) if request.content else {}
+        multipart = request.headers.get("content-type", "").startswith("multipart/")
+        body = json.loads(request.content) if request.content and not multipart else {}
+        if parts[:3] == ["v1", "customer", "disputes"]:
+            return self._dispute_route(request, parts[3:], body)
         if request.method == "POST" and path == "/v2/checkout/orders":
             return self._create(body)
         if parts[:3] == ["v2", "checkout", "orders"] and len(parts) >= 4:
@@ -183,6 +246,79 @@ class FakePayPal:
             self.authorizations[new["id"]] = new
             return httpx.Response(201, json=new)
         return _error(404, "NOT_FOUND")
+
+    def _dispute_route(self, request: httpx.Request, rest: list[str], body: dict):
+        if request.method == "GET" and not rest:
+            items = [
+                {k: d[k] for k in ("dispute_id", "reason", "status", "dispute_amount")}
+                for d in self.disputes.values()
+            ]
+            return httpx.Response(200, json={"items": items})
+        dispute = self.disputes.get(rest[0]) if rest else None
+        if dispute is None:
+            return _error(404, "RESOURCE_NOT_FOUND", "INVALID_RESOURCE_ID")
+        if request.method == "GET" and len(rest) == 1:
+            return httpx.Response(200, json=self.dispute_view(dispute))
+        action = rest[1] if len(rest) == 2 and request.method == "POST" else None
+        if action == "provide-evidence":
+            evidences = _evidence_input(request)
+            if evidences is None:
+                return _error(400, "INVALID_REQUEST", "INVALID_INPUT")
+            if dispute["status"] != "WAITING_FOR_SELLER_RESPONSE":
+                return _error(422, "UNPROCESSABLE_ENTITY", "NOT_ALLOWED")
+            self.evidence.setdefault(dispute["dispute_id"], []).extend(evidences)
+            dispute["status"] = "UNDER_REVIEW"
+            return httpx.Response(200, json={"links": self.dispute_view(dispute)["links"][:1]})
+        if action == "require-evidence":
+            if dispute["status"] != "UNDER_REVIEW":
+                return _error(422, "UNPROCESSABLE_ENTITY", "NOT_ALLOWED")
+            target = {
+                "SELLER_EVIDENCE": "WAITING_FOR_SELLER_RESPONSE",
+                "BUYER_EVIDENCE": "WAITING_FOR_BUYER_RESPONSE",
+            }.get(body.get("action"))
+            if target is None:
+                return _error(400, "INVALID_REQUEST", "INVALID_PARAMETER_VALUE")
+            dispute["status"] = target
+            return httpx.Response(200, json={"links": self.dispute_view(dispute)["links"][:1]})
+        return _error(404, "NOT_FOUND")
+
+
+def _evidence_input(request: httpx.Request) -> list[dict] | None:
+    """The `input` part of a provide-evidence multipart/form-data body: JSON
+    `{"evidences": [{"evidence_type", "notes"}]}`, notes 1-2000 characters. None if malformed."""
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("multipart/form-data"):
+        return None
+    raw = f"Content-Type: {content_type}\r\n\r\n".encode() + request.content
+    message = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(raw)
+    for part in message.iter_parts():
+        if part.get_param("name", header="content-disposition") != "input":
+            continue
+        if part.get_content_type() != "application/json":
+            return None
+        try:
+            evidences = json.loads(part.get_payload(decode=True))["evidences"]
+        except (ValueError, KeyError, TypeError):
+            return None
+        ok = (
+            isinstance(evidences, list)
+            and evidences
+            and all(
+                isinstance(e, dict)
+                and e.get("evidence_type")
+                and isinstance(e.get("notes"), str)
+                and 1 <= len(e["notes"]) <= 2000
+                for e in evidences
+            )
+        )
+        return evidences if ok else None
+    return None
+
+
+def dispute_webhook(dispute: dict, event_type: str = "CUSTOMER.DISPUTE.CREATED") -> dict:
+    """The webhook for a dispute. Its resource is the dispute without links (PayPal's can be
+    partial, so the backend reads the dispute again)."""
+    return webhook_event(event_type, {k: v for k, v in dispute.items() if k != "links"})
 
 
 def webhook_event(event_type: str, resource: dict, event_id: str | None = None) -> dict:

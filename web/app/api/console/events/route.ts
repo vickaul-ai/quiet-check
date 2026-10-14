@@ -5,7 +5,7 @@ import type { ConsoleEvent } from "@/lib/types";
 const PAYLOAD_KEYS = [
   "summary", "decision", "hit_count", "verified", "check_id", "rationale_source", "paypal_action", "actor", "note", "capture_id",
   "capture_status", "authorization_id", "authorization_status", "action", "name", "debug_id", "issue", "error", "runner", "reason",
-  "task_run_id",
+  "task_run_id", "dispute_id", "draft_source", "dispute_status",
 ];
 
 function slim(e: ConsoleEvent): ConsoleEvent {

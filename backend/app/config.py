@@ -101,6 +101,11 @@ class Settings:
     llm_model_fast: str = "claude-haiku-5-5"
     rationale_timeout_s: float = 10.0
     rationale_model: Any = None
+    # Dispute evidence drafts (D8): LLM_MODEL_SMART, a longer timeout (the note is up to 2000
+    # characters), and `dispute_model` for tests, like `rationale_model`.
+    llm_model_smart: str = "claude-sonnet-5-5"
+    dispute_timeout_s: float = 60.0
+    dispute_model: Any = None
     # Run /merchant/process when a CHECKOUT.ORDER.APPROVED webhook moves an order to approved.
     # Off only for scripts/approve_orders.py, which saves approved orders for later live runs.
     process_on_approval: bool = True
@@ -137,6 +142,7 @@ class Settings:
             "paypal_webhook_id": os.environ.get("PAYPAL_WEBHOOK_ID", ""),
             "llm_provider": os.environ.get("LLM_PROVIDER") or cls.llm_provider,
             "llm_model_fast": os.environ.get("LLM_MODEL_FAST") or cls.llm_model_fast,
+            "llm_model_smart": os.environ.get("LLM_MODEL_SMART") or cls.llm_model_smart,
             "member_urls": _member_urls_from_env(),
             "initiator_port": initiator_port,
             "initiator_host": os.environ.get("INITIATOR_BIND") or default_bind_host(),

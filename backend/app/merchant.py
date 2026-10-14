@@ -10,18 +10,22 @@ PayPal action. The decision row comes first because the payment guards need it (
 PayPal call fails after that, the order goes to `failed` with the decision kept; rerunning
 `/merchant/process` reuses the stored check and decision and resumes the PayPal action
 (decided with Vic, 2026-10-13; ADR 0008).
+
+D8 adds `POST /merchant/disputes/{dispute_id}/evidence` (the reviewer submits a dispute evidence
+note; `app/disputes.py`) and the disputes on the order reads.
 """
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import Engine, desc, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import checks, decisions, events, orders, receipts
+from app.disputes import MAX_NOTE, latest_status_column, order_disputes, submit_evidence
 from app.errors import APIError
 from app.ids import new_id
 from app.payments import (
@@ -81,6 +85,17 @@ class ProcessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     order_id: str = Field(min_length=1)
+
+
+class EvidenceRequest(BaseModel):
+    """A reviewer's evidence note (D8). Only a person submits; the model only drafts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    note: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NOTE)
+    ]
+    actor: Literal["reviewer"]
 
 
 class DecideRequest(BaseModel):
@@ -338,7 +353,7 @@ async def process_in_background(app_state, order_id: str) -> None:
 # Read endpoints
 
 
-def _summary(order, decision, hit_count) -> dict:
+def _summary(order, decision, hit_count, dispute_status) -> dict:
     return {
         "order_id": order.id,
         "status": order.status,
@@ -350,6 +365,7 @@ def _summary(order, decision, hit_count) -> dict:
         "capture_id": order.capture_id,
         "honor_period_ends_at": iso_z(order.honor_period_ends_at),
         "device_id": order.device_id,  # the demo device; the console names the persona from it
+        "dispute_status": dispute_status,  # the newest PayPal dispute's status, or None (D8)
         "created_at": iso_z(order.created_at),
     }
 
@@ -358,7 +374,7 @@ def _summary(order, decision, hit_count) -> dict:
 def list_orders(request: Request) -> dict:
     engine: Engine = request.app.state.engine
     query = (
-        select(orders, decisions.c.decision, checks.c.hit_count)
+        select(orders, decisions.c.decision, checks.c.hit_count, latest_status_column())
         .outerjoin(decisions, decisions.c.order_id == orders.c.id)
         .outerjoin(checks, checks.c.order_id == orders.c.id)
         .order_by(desc(orders.c.id))
@@ -366,7 +382,7 @@ def list_orders(request: Request) -> dict:
     )
     with engine.connect() as conn:
         rows = conn.execute(query).all()
-    return {"orders": [_summary(r, r.decision, r.hit_count) for r in rows]}
+    return {"orders": [_summary(r, r.decision, r.hit_count, r.dispute_status) for r in rows]}
 
 
 def _receipt(row) -> dict:
@@ -414,11 +430,15 @@ def get_order(order_id: str, request: Request) -> dict:
             else []
         )
         made = last_event_payload(conn, order_id, "decision.made")
+        dispute_list = order_disputes(conn, order_id)
     check_body = check_response(engine, check) if check and check.status == "completed" else None
     order_rank = {r["receipt_id"]: i for i, r in enumerate((check_body or {}).get("receipts", []))}
     receipt_rows = sorted(receipt_rows, key=lambda r: order_rank.get(r.id, 0))
     summary = _summary(
-        order, decision.decision if decision else None, check.hit_count if check else None
+        order,
+        decision.decision if decision else None,
+        check.hit_count if check else None,
+        dispute_list[0]["status"] if dispute_list else None,
     )
     return {
         **summary,
@@ -430,7 +450,16 @@ def get_order(order_id: str, request: Request) -> dict:
         "receipts": [_receipt(r) for r in receipt_rows],
         "decision": _decision(decision, made.get("rationale_source")) if decision else None,
         "who_saw_what": WHO_SAW_WHAT,
+        "disputes": dispute_list,
     }
+
+
+@router.post("/disputes/{dispute_id}/evidence")
+async def dispute_evidence(dispute_id: str, body: EvidenceRequest, request: Request) -> dict:
+    """The reviewer's click in the console: send the edited note to PayPal (D8)."""
+    return await submit_evidence(
+        request.app.state.engine, request.app.state.paypal, dispute_id, body.note
+    )
 
 
 @router.get("/orders/{order_id}/status")
