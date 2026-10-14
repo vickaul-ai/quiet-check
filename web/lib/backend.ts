@@ -1,7 +1,7 @@
 import "server-only";
 
 import { backendUrl } from "./env";
-import type { CartLine, Product } from "./types";
+import type { CartLine, ConsoleEvent, OrderDetail, OrderRow, Product } from "./types";
 
 // Server-side calls to the FastAPI backend (docs/contracts.md). Errors keep the contract's
 // `{error: {code, message}}` body so routes can pass the code on.
@@ -53,4 +53,27 @@ export async function processOrder(orderId: string): Promise<string> {
 export async function getOrderStatus(orderId: string): Promise<string> {
   const path = `/merchant/orders/${encodeURIComponent(orderId)}/status`;
   return (await call<{ status: string }>("GET", path)).data.status;
+}
+
+// Merchant console (D6). The detail carries payer email and address; callers strip them (see lib/copilot.ts).
+export async function listOrders(): Promise<OrderRow[]> {
+  return (await call<{ orders: OrderRow[] }>("GET", "/merchant/orders")).data.orders;
+}
+
+export async function getOrder(orderId: string): Promise<OrderDetail & { payer_email?: unknown; shipping_address?: unknown }> {
+  return (await call<OrderDetail>("GET", `/merchant/orders/${encodeURIComponent(orderId)}`)).data;
+}
+
+// Up to 50 events after `after`, oldest first.
+export async function listEvents(after?: string): Promise<ConsoleEvent[]> {
+  const query = after ? `?after=${encodeURIComponent(after)}` : "";
+  return (await call<{ events: ConsoleEvent[] }>("GET", `/merchant/events${query}`)).data.events;
+}
+
+export type Resolution = { order_id: string; authorization_id: string; status: string; capture_id?: string };
+
+// Reviewer actions on a held order. The backend enforces `held`, writes `resolution` and the events.
+export async function resolveHold(action: "capture" | "void", authorizationId: string, note: string): Promise<Resolution> {
+  const path = `/payments/authorizations/${encodeURIComponent(authorizationId)}/${action}`;
+  return (await call<Resolution>("POST", path, { actor: "reviewer", note })).data;
 }

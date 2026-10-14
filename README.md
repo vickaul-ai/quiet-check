@@ -3,7 +3,7 @@
 A merchant agent privately checks an AI-agent purchase against other merchants' fraud lists (AP3 private set
 intersection), then uses PayPal to capture, hold or decline the payment. No merchant ever shares its list.
 
-Built for the PayPal AI Hackathon (2026). Status: the AP3 consortium check (D2), the PayPal payments service (D3), the merchant risk agent (D4) and the demo personas (D7) work; the storefront and console land through November 2026.
+Built for the PayPal AI Hackathon (2026). Status: the AP3 consortium check (D2), the PayPal payments service (D3), the merchant risk agent (D4), the demo personas (D7), the storefront and shopping agent (D5) and the merchant console with its review copilot (D6, `/console`) work locally; hosting, tests and the README land through November 2026.
 
 ## Quickstart
 

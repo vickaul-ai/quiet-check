@@ -10,7 +10,7 @@ Any session that changes an interface updates this file in the same change and n
 | Backend (FastAPI) | 8000 | Routers: `/risk`, `/payments`, `/merchant`, `/webhooks` |
 | AP3 initiator (`ap3_initiator` PrivacyAgent, in the backend process) | 8100 | Started in the backend's lifespan. It serves the merchant's AgentCard so members can verify our signed intents |
 | Member A / B / C (AP3 `ap3_receiver`, A2A server) | 8101 / 8102 / 8103 | Each runs in its own process and holds one private list (about 300 hashes of all three fields). Nothing else reads it. Each answers only the initiator URLs on its allowlist (default `http://127.0.0.1:8100`; see "Member list files") |
-| Web (Next.js: storefront + console) | 3000 | Its server code calls the backend at `BACKEND_URL`; the browser never does (ADR 0009). Storefront routes below |
+| Web (Next.js: storefront + console) | 3000 | Its server code calls the backend at `BACKEND_URL`; the browser never does (ADR 0009). Storefront and console routes below |
 
 - **Our IDs:** prefix + ULID: `ord_`, `chk_`, `rcp_`, `dec_`, `evt_`. Paths under `/payments/orders` and `/merchant` take
   **our** `order_id`. Authorisation and capture paths take **PayPal's** IDs.
@@ -431,6 +431,31 @@ its `device_id`; unknown keys get `422`), and `cart` is `[{sku, quantity}]` (up 
 `paypal_order_id` to the PayPal JS SDK v6 (`presentationMode: "popup"`), then on approval calls the process route
 and polls the status route every 1.5 s, for up to 2 minutes, until `captured`, `held`, `blocked` or `voided`.
 
+### Console routes (web, D6)
+
+The merchant console lives at `/console` in the same app, linked from the shop header; no gate until D9 (ADR 0010).
+The browser calls only these routes. Payer email and shipping address never leave the Next.js server: the detail route
+drops them, and the events route passes only these payload keys: `summary`, `decision`, `hit_count`, `verified`,
+`check_id`, `rationale_source`, `paypal_action`, `actor`, `note`, `capture_id`, `capture_status`, `authorization_id`,
+`authorization_status`, `action`, `name`, `debug_id`, `issue`, `error` (PayPal webhook payloads hold the payer).
+
+| Route | Calls | Returns to the browser |
+| --- | --- | --- |
+| `GET /api/console/orders` | `GET /merchant/orders` | `{orders}` unchanged |
+| `GET /api/console/orders/{order_id}` | `GET /merchant/orders/{order_id}` | The detail without `payer_email` and `shipping_address` |
+| `GET /api/console/events?after=evt_...` | `GET /merchant/events` | `{events}` with payloads cut to the keys above; a malformed `after` is `422` |
+| `POST /api/console/chat` | The review copilot (`LLM_MODEL_FAST`, `prompts/review_copilot.md`) and its tools | An AI SDK UI message stream |
+
+`/api/console/chat` takes `{messages, order_id}` (the order open in the console). Tools: `get_order` reads the detail
+and gives the model a summary (status, decision, rationale, which member matched which field, receipts verified,
+honour-period time left, resolution; no identifiers). `capture_held_payment` and `void_held_payment` take
+`{order_id, note}`, need AI SDK tool approval (`toolApproval: 'user-approval'`, signed with
+`experimental_toolApprovalSecret`), refuse any order other than the open one or one that isn't `held`, and then call
+`POST /payments/authorizations/{authorization_id}/capture` or `/void` with `{"actor": "reviewer", "note"}`. Their
+output is `{order_id, status, capture_id}` or `{error}`. The page polls the events route every 2 s (paging to the
+newest on load) and refreshes the table and open order when any event arrives; the orders list also refreshes every
+10 s.
+
 ## Webhook events handled
 
 | Event | Action |
@@ -567,6 +592,7 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | --- | --- | --- |
 | `PAYPAL_CLIENT_ID` | Backend; web (JS SDK) | Sandbox REST app client ID. Public: the web server hands it to the browser |
 | `BACKEND_URL` | Web (server only) | `http://127.0.0.1:8000` (D5) |
+| `TOOL_APPROVAL_SECRET` | Web (server only) | Optional (D6): HMAC key that signs the copilot's approval requests. Unset: a random per-process key, fine for one local server; set it (`openssl rand -base64 32`) once the web app runs on more than one instance |
 | `PAYPAL_CLIENT_SECRET` | Backend only | Sandbox REST app secret |
 | `PAYPAL_WEBHOOK_ID` | Backend (webhook verification) | From the dashboard webhook config |
 | `ANTHROPIC_API_KEY` | Backend; web | - |

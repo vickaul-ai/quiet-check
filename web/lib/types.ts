@@ -25,3 +25,73 @@ export function buyerText(status: string): string {
   if (status === "blocked" || status === "voided") return "We couldn't complete this order";
   return "Processing";
 }
+
+// Merchant console (D6, contracts.md "Read endpoints"). Payer email and address never reach the browser.
+export type OrderRow = {
+  order_id: string;
+  status: string;
+  decision: string | null;
+  hit_count: number | null;
+  amount: Money;
+  paypal_order_id: string;
+  authorization_id: string | null;
+  capture_id: string | null;
+  honor_period_ends_at: string | null;
+  created_at: string;
+};
+
+export type Hit = { member: string; field: string; is_match: boolean };
+
+export type Receipt = Hit & {
+  receipt_id: string;
+  check_id: string;
+  session_id: string;
+  intent_directives: unknown[];
+  result_directive: unknown;
+  member_commitment: unknown;
+  member_public_key: string;
+  verified: boolean;
+  created_at: string;
+};
+
+export type Decision = {
+  decision_id: string;
+  check_id: string;
+  decision: string;
+  rationale: string;
+  rationale_source: string | null;
+  paypal_action: string;
+  resolution: string | null;
+  resolution_note: string | null;
+  resolved_at: string | null;
+  created_at: string;
+};
+
+export type WhoSawWhat = { party: string; sent: string; learned: string; never_saw: string };
+
+export type OrderDetail = Omit<OrderRow, "decision"> & {
+  items: (CartLine & { name: string; unit_amount: Money })[];
+  device_id: string;
+  check: { check_id: string; hits: Hit[]; hit_count: number } | null;
+  receipts: Receipt[];
+  decision: Decision | null;
+  who_saw_what: WhoSawWhat[];
+};
+
+export type ConsoleEvent = {
+  event_id: string;
+  source: string;
+  event_type: string;
+  order_id: string | null;
+  paypal_event_id: string | null;
+  resource_id: string | null;
+  verified: boolean | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export const FIELD_LABELS: Record<string, string> = {
+  email: "email",
+  shipping_address: "address",
+  device_id: "device",
+};

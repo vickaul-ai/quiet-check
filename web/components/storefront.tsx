@@ -3,6 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { PayPalCheckout } from "@/components/paypal-checkout";
@@ -23,7 +24,12 @@ export function Storefront({ catalog, personas, clientId }: Props) {
           <h1 className="text-2xl font-semibold">Quiet Check demo shop</h1>
           <p className="text-sm text-[var(--muted)]">Ask the shopping agent, then approve the payment in PayPal.</p>
         </div>
-        <PersonaSwitcher personas={personas} value={personaKey} onChange={setPersonaKey} />
+        <div className="flex flex-wrap items-center gap-3">
+          <PersonaSwitcher personas={personas} value={personaKey} onChange={setPersonaKey} />
+          <Link href="/console" className="text-sm underline underline-offset-4">
+            Merchant console
+          </Link>
+        </div>
       </header>
       {persona && (
         <p className="rounded-md bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted)]">

@@ -1,6 +1,6 @@
 # Quiet Check: Engineering
 
-_Last reviewed: 2026-10-13_
+_Last reviewed: 2026-10-14_
 
 Interfaces are specified in [contracts.md](contracts.md); this file covers how the code is laid out and run.
 
@@ -86,6 +86,18 @@ PayPal order ID. `onApprove` calls `/api/orders/{id}/process`, then polls `/stat
 buyer text from `lib/types.ts`. `lib/backend.ts` is the only code that calls the backend; `lib/env.ts` loads the
 repo-root `.env`. Product images are SVGs in `web/public/products/`.
 
+## Merchant console and review copilot (D6)
+
+ADR 0010. `app/console/page.tsx` renders `components/console.tsx`, a client component that reads only the
+`/api/console/*` routes. It pages `/api/console/events` to the newest event on load, then polls every 2 s; any new event
+refreshes the orders table and the open order, so a PayPal webhook shows up within about 2 s. The orders list also
+refreshes every 10 s. `lib/copilot.ts` strips payer email and address from the order detail (`consoleOrder`), builds the
+model's order summary and defines the copilot tools. `app/api/console/chat/route.ts` runs `streamText` with
+`prompts/review_copilot.md` and `toolApproval` on the two money tools, signed with `experimental_toolApprovalSecret`
+(`TOOL_APPROVAL_SECRET`, or a random per-process key). `components/copilot.tsx` (`useChat`, keyed on the open order)
+renders the Approve/Deny card and sends the response back with `sendAutomaticallyWhen:
+lastAssistantMessageIsCompleteWithApprovalResponses`; the tool runs on that second request.
+
 ## Key files
 
 | Path | Holds |
@@ -117,6 +129,9 @@ repo-root `.env`. Product images are SVGs in `web/public/products/`.
 | `web/components/paypal-checkout.tsx` | PayPal JS SDK v6 button, `onApprove` -> process -> status polling, buyer status |
 | `web/app/api/chat/route.ts`, `web/lib/agent.ts` | The shopping agent: `streamText` and its three tools |
 | `web/app/api/orders/[orderId]/{process,status}/route.ts` | Server proxies for `/merchant/process` and the status endpoint |
+| `web/app/console/page.tsx`, `web/components/console.tsx` | Merchant console: orders table, order detail (rationale, hit grid, receipts, who saw what), live event feed |
+| `web/components/copilot.tsx`, `web/lib/copilot.ts`, `web/app/api/console/chat/route.ts` | Review copilot UI with the Approve/Deny card; its tools and route |
+| `web/app/api/console/{orders,events}/` | Server proxies for the console's reads (payer details removed) |
 | `web/lib/model.ts`, `env.ts`, `backend.ts`, `personas.ts`, `types.ts` | Model factory, root `.env` loading, backend client, persona loading, shared types and buyer text |
 | `web/public/products/` | Product SVGs (referenced by `catalog.json`'s `image`) |
 | `scripts/check_sandbox.py` | PayPal sandbox OAuth check (uv inline-script dependencies) |

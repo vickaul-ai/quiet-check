@@ -1,6 +1,6 @@
 # Quiet Check
 
-_Last reviewed: 2026-10-13_
+_Last reviewed: 2026-10-14_
 
 A merchant agent privately checks AI-agent purchases against other merchants' fraud lists with AP3 PSI, then captures,
 holds or declines the payment through PayPal Orders v2 (sandbox only).
@@ -19,6 +19,6 @@ holds or declines the payment through PayPal Orders v2 (sandbox only).
   PayPal; live runs (`make approve-orders`, `make test-live`, `make gate-a`) need a human to approve orders once and
   `ngrok http 8000` (ADR 0007). Payment endpoints enforce status guards; the risk agent (`app/merchant.py`, ADR 0008)
   owns status changes. Demo lists: `make seed`; persona emails live only in `.env`.
-- Web (ADR 0009): the browser never calls the backend; the Next.js server does, at `BACKEND_URL`, and reads the
+- Web (ADRs 0009, 0010): storefront at `/`, merchant console and review copilot at `/console`. The browser never calls the backend; the Next.js server does, at `BACKEND_URL`, and reads the
   repo-root `.env`. Next.js 16 and AI SDK v7 differ from older docs; read the bundled docs in `node_modules` first.
 - Docs: `docs/PRODUCT.md`, `docs/ENGINEERING.md`, ADRs in `docs/decisions/`.

@@ -1,6 +1,6 @@
 # Quiet Check: Product
 
-_Last reviewed: 2026-10-13_
+_Last reviewed: 2026-10-14_
 
 The audience, problem, demo story, personas, decision policy and out-of-scope list are in [brief.md](brief.md). This
 file tracks what exists today.
@@ -26,7 +26,12 @@ file tracks what exists today.
   PayPal button; the buyer approves in the PayPal pop-up and sees "Paid", "Payment on hold for review" or "We couldn't
   complete this order". Products can also be added by hand and checked out through the agent. A persona switcher
   picks Ana, Ben or Cy (their device ID); the buyer logs in to PayPal as that persona's sandbox account.
-- No merchant console yet (D6).
+- **Merchant console and review copilot (D6):** `/console`, linked from the shop header. An orders table (status,
+  decision, hits, PayPal order, authorisation and capture IDs, time left in the 3-day honour period for held orders);
+  the open order's AI rationale, a 3 x 3 member-by-field hit grid, its 9 receipts (verified, with the signed intents,
+  result and member commitment) and the who-saw-what panel; a live feed of PayPal webhooks and our own events. The
+  copilot explains a hold ("why is this on hold?") and, on the reviewer's instruction, captures or voids the held
+  payment after one Approve on a card showing the order, amount, action and note. No login yet (D9).
 
 ## Roadmap
 
