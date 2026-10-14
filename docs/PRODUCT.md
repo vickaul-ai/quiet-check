@@ -1,13 +1,16 @@
 # Quiet Check: Product
 
-_Last reviewed: 2026-10-12_
+_Last reviewed: 2026-10-13_
 
 The audience, problem, demo story, personas, decision policy and out-of-scope list are in [brief.md](brief.md). This
 file tracks what exists today.
 
 ## Capabilities (built)
 
-None yet: the repo is a scaffold (D1). The backend serves `/health`; the web app shows a placeholder page.
+- **AP3 private check (D2):** `POST /risk/check` checks a buyer's email, shipping address and device ID against
+  Members A, B and C (9 PSI sessions, ~3 s) and returns per-member, per-field hits plus 9 verified receipts. Members run
+  as separate processes and never share their lists. Idempotent per order; a failed check can be rerun.
+- No storefront, payments or console yet. The web app shows a placeholder page.
 
 ## Roadmap
 
@@ -25,6 +28,8 @@ None yet: the repo is a scaffold (D1). The backend serves `/health`; the web app
 
 - AP3 is a research preview: proof fields are placeholders, and PSI shows the merchant which member matched which field.
 - Sandbox only; USD only.
+- Receipts are signed by the merchant (intents and result); a member's only signature is on its commitment (ADR 0004).
+- Members load their lists at startup; reseeding needs a member restart.
 
 ## Non-goals
 

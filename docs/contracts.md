@@ -199,11 +199,20 @@ Response `200`:
 A receipt holds what can be checked, and nothing more: the merchant's 2 signed `PrivacyIntentDirective`s for the
 session (phases `init` and `msg1`, which the member verified before answering), the merchant's signed
 `PrivacyResultDirective`, and the member's signed commitment from its AgentCard. `verified` is true when all of these
-signatures check out. Member replies aren't signed in AP3 1.2.2, so the UI never calls this a "member-signed receipt".
+signatures check out, and both intents carry the result's session ID. Member replies aren't signed in AP3 1.2.2, so the
+UI never calls this a "member-signed receipt".
 
 `hits` always holds all 9 results, ordered by member and then field as above. `receipts` holds one entry per session (9
 in all; only one is shown above). `hit_count` is the number of `is_match: true` entries. A repeat call for the same
-`order_id` returns the stored check and doesn't rerun PSI.
+`order_id` returns the stored check and doesn't rerun PSI, even if the identifiers differ.
+
+The order must exist (`404 not_found` otherwise); this endpoint doesn't change the order's status. If the order's check
+is still `running`, the call returns `409 invalid_state`. If it `failed`, the call reruns PSI on the same `check_id`,
+replacing that check's receipts. On a member failure the `502 member_unavailable` details hold `check_id` and `members`
+(the members whose sessions failed).
+
+Each successful or failed check also writes a `system` event: `check.completed` (payload `check_id`, `hit_count`,
+`verified`) or `check.failed` (payload `check_id`, `error`, `members`).
 
 ### `POST /merchant/process`: run the risk agent on an approved order
 
@@ -355,7 +364,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | `order_id` | text unique FK -> orders | One check per order |
 | `status` | text | `running`, `completed`, `failed` |
 | `hit_count` | integer null | Set when completed |
-| `error` | text null | Error code if failed (never list contents) |
+| `error` | text null | Error code if failed: `member_unavailable`, or `internal_error` for an unexpected failure (never list contents) |
 | `started_at`, `completed_at` | timestamp | |
 
 **`receipts`**: one row per PSI session; the hits are derived from these rows.
@@ -368,7 +377,7 @@ SQLite locally, Postgres on Render. Types are given in portable terms; JSON colu
 | `field` | text | `email`, `shipping_address`, `device_id` |
 | `is_match` | boolean | |
 | `session_id` | text | AP3 PSI session ID |
-| `intent_directives` | json | Array of the 2 `PrivacyIntentDirective`s we signed (`init`, `msg1`) |
+| `intent_directives` | json | Array of the 2 `PrivacyIntentDirective`s we signed, in send order (`init`, then `msg1`) |
 | `result_directive` | json | `PrivacyResultDirective`, signed by the merchant |
 | `member_commitment` | json | The member's commitment from its AgentCard, signed by the member |
 | `member_public_key` | text | The member's Ed25519 public key (hex), from its AgentCard |
@@ -418,6 +427,12 @@ every side. Normalise, then hash, before a value enters PSI or a member's list f
 Hash: `sha256("<field>:" + normalised_value)`, as lowercase hex, where `<field>` is `email`, `shipping_address` or
 `device_id`. The prefix stops an email from matching an address. Member list files store only these hashes.
 
+**Member list files** (D2): `<MEMBER_DATA_DIR>/<A|B|C>/list.csv`, one lowercase hex hash per line, no header, all three
+fields mixed. Next to it, `key.json` holds the member's Ed25519 keypair as hex; the member creates it on first start and
+keeps it. The member reads its list once at startup, refuses to start if the file is missing or empty, and publishes
+`sha256` of the sorted list as its commitment's `data_hash`. The initiator's key lives in `backend/var/initiator/key.json`
+so stored receipts can be re-verified after a restart. All of `backend/var/` is git-ignored.
+
 Example: `" Ben.Buyer@Example.com "` -> `ben.buyer@example.com` -> `sha256("email:ben.buyer@example.com")`.
 
 D10 unit-tests these rules. List entries, normalised values and hashes never appear in logs (a CI grep enforces this).
@@ -434,6 +449,8 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `LLM_MODEL_FAST` | Shopping agent, rationale, copilot | `claude-haiku-5-5` |
 | `LLM_MODEL_SMART` | Dispute drafts (D8) | `claude-sonnet-5-5` |
 | `DATABASE_URL` | Backend | `sqlite:///./quietcheck.db` locally; Render Postgres URL when hosted |
+
+| `MEMBER_DATA_DIR` | Members | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
 
 Later deliverables that add a variable (for example, member URLs for Render in D9) list it here and in `.env.example`.
 

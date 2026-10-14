@@ -21,6 +21,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -q
+      - name: No list entries or identifiers in logs
+        run: uv run python scripts/scan_logs.py
 
   web:
     runs-on: ubuntu-latest

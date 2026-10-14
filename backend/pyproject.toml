@@ -4,9 +4,14 @@ version = "0.1.0"
 description = "Quiet Check backend: risk agent, AP3 risk check, PayPal payments service, webhooks"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "ap3-functions==1.2.2",
+    "ap3[a2a]==1.2.2",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
+    "psycopg[binary]>=3.2",
     "python-dotenv>=1.2.4",
+    "python-ulid>=3.0",
+    "sqlalchemy>=2.0,<2.1",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -27,3 +32,5 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not slow'"
+markers = ["slow: demo-size timing run (opt-in: -m slow)"]

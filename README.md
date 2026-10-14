@@ -3,7 +3,7 @@
 A merchant agent privately checks an AI-agent purchase against other merchants' fraud lists (AP3 private set
 intersection), then uses PayPal to capture, hold or decline the payment. No merchant ever shares its list.
 
-Built for the PayPal AI Hackathon (2026). Status: scaffold only (D1); features land through November 2026.
+Built for the PayPal AI Hackathon (2026). Status: the AP3 consortium check works (D2); payments, agents and UI land through November 2026.
 
 ## Quickstart
 
@@ -20,8 +20,10 @@ make dev                  # backend on :8000, web on :3000
 
 | Command | Does |
 | --- | --- |
-| `make dev` | Runs the FastAPI backend (`:8000`, `/health`) and the Next.js app (`:3000`) together |
-| `make check` | What CI runs: ruff, pytest, eslint, type-check |
+| `make dev` | Runs the backend (`:8000`, with the AP3 initiator on `:8100`), Members A-C (`:8101-8103`) and the web app (`:3000`). Members need list files in `backend/var/members/` (D7 seeds them) |
+| `make dev-member-A` (`-B`, `-C`) | Runs one consortium member |
+| `make check` | What CI runs: ruff, pytest, the log scan for list contents, eslint, type-check |
+| `cd backend && uv run pytest -m slow -s` | Times `/risk/check` with ~300-entry member lists (target about 3 s) |
 | `make sandbox` | `uv run scripts/check_sandbox.py` |
 
 ## Environment variables
