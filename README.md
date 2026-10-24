@@ -186,7 +186,7 @@ Guardrail: the backend recomputes the policy from the stored receipts and reject
 
 **Used to build it.** The code, tests and docs were written with Claude Code (Claude Opus 5.5) under Vic's direction;
 commits it co-authored carry a `Co-Authored-By` trailer. The demo video's narration is ElevenLabs text-to-speech
-(voice: elevenlabs.io), from a script written with Claude Code.
+(voice: elevenlabs.io).
 
 ## Try it hosted
 
