@@ -156,7 +156,7 @@ parses the multipart `input` part and implements require-evidence; `tests/test_d
 | `web/lib/model.ts`, `env.ts`, `backend.ts`, `personas.ts`, `types.ts` | Model factory, root `.env` loading, backend client, persona loading, shared types and buyer text |
 | `web/public/products/` | Product SVGs (referenced by `catalog.json`'s `image`) |
 | `scripts/check_sandbox.py` | PayPal sandbox OAuth check (uv inline-script dependencies) |
-| `scripts/check_hosted.sh` | Hosted smoke check; with `BACKEND_API_TOKEN` also `/health/deep` |
+| `scripts/check_hosted.sh` | Hosted smoke check; with `BACKEND_API_TOKEN` also `/health/deep`; with `CHECK_AI=1` one shop chat (model answers) |
 | `scripts/e2e_hosted.py` | `make e2e-hosted` (D10, Gate C): the personas through the hosted shop and PayPal pop-up (Playwright), checked through the console routes; `--count N --together` for concurrency |
 | `prompts/` | LLM prompts, one file per task |
 | `site/index.html` | The judges' summary, served by the `quietcheck-report` static site (no build step) |

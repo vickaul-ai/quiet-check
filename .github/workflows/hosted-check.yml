@@ -1,6 +1,7 @@
 name: Hosted check
 
-# Hourly synthetic check of the hosted demo (D10): scripts/check_hosted.sh plus GET /health/deep.
+# Hourly synthetic check of the hosted demo (D10): scripts/check_hosted.sh plus GET /health/deep
+# and one shopping-agent chat (CHECK_AI, so a spent model budget fails the run).
 # A failed run emails whoever GitHub notifies for this workflow (Settings > Notifications >
 # Actions: "Only notify for failed workflows"). Hourly keeps the private repo inside its free
 # Actions minutes. Stops by itself after judging ends (Dec 15, 2026; services shut down Dec 16); disable it then:
@@ -32,12 +33,13 @@ jobs:
           fi
       - uses: actions/checkout@v7
         if: steps.window.outputs.skip != 'true'
-      - name: Smoke check and deep health
+      - name: Smoke check, deep health and AI
         if: steps.window.outputs.skip != 'true'
         env:
           HOSTED_BACKEND_URL: ${{ secrets.HOSTED_BACKEND_URL }}
           HOSTED_WEB_URL: ${{ secrets.HOSTED_WEB_URL }}
           BACKEND_API_TOKEN: ${{ secrets.BACKEND_API_TOKEN }}
+          CHECK_AI: "1"
         run: scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"
       - name: Forced failure (manual test of the email)
         if: inputs.force_fail

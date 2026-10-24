@@ -797,6 +797,7 @@ D10 unit-tests these rules. List entries, normalised values and hashes never app
 | `MEMBER_DATA_DIR` | Members; `scripts/seed.py` | `backend/var/members` (folders `A`, `B`, `C`; see "Member list files") |
 | `PERSONA_ANA_EMAIL`, `PERSONA_BEN_EMAIL`, `PERSONA_CY_EMAIL` | `scripts/seed.py`, `scripts/live_personas.py`; hosted members (D9: A and C get Cy's, B gets Ben's) | The three sandbox buyer emails (one account each). Kept out of the repo, which goes public at D11 |
 | `PERSONA_ANA_PASSWORD`, `PERSONA_BEN_PASSWORD`, `PERSONA_CY_PASSWORD` | `scripts/e2e_hosted.py` (D10) | The sandbox buyers' passwords, local `.env` only; the script logs in to the PayPal pop-up with them and never prints them |
+| `CHECK_AI` | `scripts/check_hosted.sh` (set to `1` by the hourly check) | `1` adds one public shop chat ("hi", about 1,150 fast-model tokens) and fails unless the model answers |
 | `HOSTED_WEB_URL`, `HOSTED_BACKEND_URL` | `scripts/e2e_hosted.py`, `scripts/check_hosted.sh` callers; the hourly check (repo secrets) | The hosted demo's public URLs (written by `scripts/render_setup.sh`) |
 | `HOSTED_CONSOLE_PASSWORD` (or `HOSTED_CONSOLE_PASSWORD_FILE`) | `scripts/e2e_hosted.py` (D10) | The hosted `CONSOLE_PASSWORD`, or a file holding it; the script reads each order through the console routes. Not named `CONSOLE_PASSWORD`, which would lock the local console |
 

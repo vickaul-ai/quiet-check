@@ -67,7 +67,8 @@ Validate before pushing with the Render CLI (`render login`, `render workspace s
 - **Smoke check / warm-up** (e.g. on recording day): `scripts/check_hosted.sh "$HOSTED_BACKEND_URL" "$HOSTED_WEB_URL"`.
   Paid instances don't sleep, so the times it prints are warm response times. With `BACKEND_API_TOKEN` in the
   environment it also checks `/health/deep`.
-- **Hourly check (D10):** `.github/workflows/hosted-check.yml` runs the smoke check and the deep health check every
+- **Hourly check (D10):** `.github/workflows/hosted-check.yml` runs the smoke check, the deep health check and one
+  shopping-agent chat (`CHECK_AI=1`: fails when the Anthropic budget is spent, which no other check sees) every
   hour (repo secrets `HOSTED_BACKEND_URL`, `HOSTED_WEB_URL`, `BACKEND_API_TOKEN`). A failed run emails Vic (GitHub
   notifications for failed workflows). To test the email: Actions > Hosted check > Run workflow with `force_fail`.
 - **Persona run (D10, Gate C):** `make e2e-hosted` drives Ana, Ben and Cy through the shop and the PayPal pop-up and

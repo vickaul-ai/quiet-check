@@ -6,8 +6,11 @@
 #
 # Needs curl and python3. The checks above the deep one never send a token or password, so they
 # check what a stranger sees. With BACKEND_API_TOKEN in the environment it also calls
-# GET /health/deep and fails unless it reports ok (database, members, lists, workflow; D10). The
-# hourly GitHub Action (.github/workflows/hosted-check.yml) runs it that way.
+# GET /health/deep and fails unless it reports ok (database, members, lists, workflow; D10). With
+# CHECK_AI=1 it also sends the shop's agent one public chat ("hi") and fails unless the model answers:
+# a spent Anthropic budget otherwise leaves every other check green (seen 2026-10-24). One probe is
+# about 1,150 tokens on the fast model. The hourly GitHub Action (.github/workflows/hosted-check.yml)
+# runs it with both.
 set -uo pipefail
 
 BACKEND="${1:?backend URL}"; WEB="${2:?web URL}"
@@ -73,6 +76,22 @@ for m in r["members"]:
 line(r["workflow"]["configured"], f"workflow {r['workflow'].get('task')}")
 sys.exit(0 if r["ok"] else 1)
 PY
+fi
+
+if [[ "${CHECK_AI:-}" == "1" ]]; then
+  echo "AI"
+  # The same request the shop makes; counts against the public chat limits like any visitor.
+  start=$(date +%s)
+  stream=$(curl -s --max-time 90 -X POST "$WEB/api/chat" -H 'Content-Type: application/json' \
+    -d '{"persona":"ana","cart":[],"messages":[{"id":"probe","role":"user","parts":[{"type":"text","text":"hi"}]}]}') \
+    || stream=""
+  secs=$(( $(date +%s) - start ))
+  if grep -q '"type":"text-delta"' <<<"$stream" && ! grep -q '"type":"error"' <<<"$stream"; then
+    printf '  ok    %-44s answered in %ss\n' "POST /api/chat (shopping agent replies)" "$secs"
+  else
+    why=$(grep -o '"errorText":"[^"]*"\|"code":"[a-z_]*"' <<<"$stream" | head -1)
+    printf '  FAIL  %-44s %s (%ss)\n' "POST /api/chat (shopping agent replies)" "${why:-no reply}" "$secs"; fail=1
+  fi
 fi
 
 exit $fail
