@@ -7,10 +7,9 @@ Built for the PayPal AI Hackathon 2026 (solo entry by Vic Kaul). PayPal sandbox 
 
 **[Live demo](https://quietcheck-web.onrender.com)** · **[Judges' summary](https://quietcheck-report.onrender.com)** ·
 merchant console at [`/console`](https://quietcheck-web.onrender.com/console) (password in the Devpost testing
-instructions) · video: _link added at submission_
+instructions) · **[Video (2:51)](https://youtu.be/4CmrLt8f9fo)**
 
-<!-- GIF: cut from the D12 screen recording (shop -> PayPal pop-up -> decision -> console). -->
-_Demo GIF: coming with the video._
+![Ana asks the shopping agent for a backpack and sees Paid; then a reviewer has the copilot capture a held order](docs/demo.gif)
 
 | 9 | 14-18 s | 0 | 134 |
 | --- | --- | --- | --- |
@@ -186,7 +185,8 @@ Guardrail: the backend recomputes the policy from the stored receipts and reject
 (`409 policy_mismatch`). A swap to Sonnet for the fast tasks was tested live (measured).
 
 **Used to build it.** The code, tests and docs were written with Claude Code (Claude Opus 5.5) under Vic's direction;
-commits it co-authored carry a `Co-Authored-By` trailer.
+commits it co-authored carry a `Co-Authored-By` trailer. The demo video's narration is ElevenLabs text-to-speech
+(voice: elevenlabs.io), from a script written with Claude Code.
 
 ## Try it hosted
 
